@@ -1,0 +1,15 @@
+diffusion:
+  lambda_rcxyz: 0.0
+  lambda_repr: 0.5
+  lambda_vel: 0.2
+  lambda_acce: 0.1
+  contact_loss: false
+  lambda_contact: 1.0
+  lambda_contact_predict: 1.0
+  lambda_fc: 0.0
+  lambda_ig: 0.0
+  lambda_w_ig: 0.0
+  noise_schedule: cosine
+  diffusion_steps: 1000
+  sigma_small: true
+  repr: ${data.repr}

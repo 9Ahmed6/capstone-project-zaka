@@ -1,0 +1,10 @@
+defaults:
+  - train: train_config
+  - model: text_t5
+  - data: handx
+  - _self_
+
+seed: 42
+hydra:
+  run:
+    dir: ${train.save_dir}/hydra_log/${now:%Y-%m-%d}-${now:%H-%M-%S}

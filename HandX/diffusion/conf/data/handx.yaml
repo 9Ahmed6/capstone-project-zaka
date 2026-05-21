@@ -1,0 +1,10 @@
+defaults:
+  - _base
+  - _self_
+
+_target_: src.diffusion.data_loader.handx.HandXDataset
+
+repr: joint_pos_w_scalar_rot
+data_dir: null
+data_file_name: can_pos_all_wotextfeat.npz
+contact_label: true

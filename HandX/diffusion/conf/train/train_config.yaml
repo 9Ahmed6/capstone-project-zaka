@@ -1,0 +1,37 @@
+save_dir: exps/save_dir
+overwrite: True
+train_platform_type: WandbPlatform
+log_interval: 16
+save_interval: 5_000
+num_steps: 100_000_000
+resume_checkpoint: ""
+dataloader:
+  batch_size: 1536
+  num_workers: 8
+  shuffle: true
+eval_during_training: false
+eval_cfg:
+  eval_interval: 50_000
+  dataloader:
+    batch_size: 512
+    num_workers: ${train.dataloader.num_workers}
+    shuffle: false
+  num_samples_on_train: 2048
+  num_samples_on_val: 512
+  num_samples_per_condition: 16
+val_during_training: true
+val_cfg:
+  val_interval: 1000
+  dataloader:
+    batch_size: ${train.dataloader.batch_size}
+    num_workers: ${train.dataloader.num_workers}
+    shuffle: false
+optimizer:
+  lr: 0.0001
+  weight_decay: 0.000005
+sample:
+  guidance_param: 2.5
+viz_during_training: true
+viz_cfg:
+  denoising_steps: [999, 500, 250, 100, 50, 10, 5, 0]
+  samples_count: 1

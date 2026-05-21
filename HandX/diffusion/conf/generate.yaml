@@ -1,0 +1,11 @@
+model_path: /path/to/your/model/checkpoint
+output_dir: /your/output/directory
+num_samples: 10
+sample:
+  guidance_param: 2.5
+action_name: null
+text_prompt:
+  - This hand exhibits continuous tapping motions, with the thumb making contact with the index, middle, and ring fingers at different times. The middle finger contact is the most frequent and prolonged. The wrist moves right, then forward, then down.
+  - The thumb makes several long-duration contacts with the middle and ring fingertips, and one with the pinky tip. The fingers are in constant flux, bending and straightening, while the spacing between them changes mid-sequence.
+  - There is no interaction between the hands. They maintain a fixed, far-apart orientation for the entire duration, with the right hand behind and to the right of the left.
+motion_length: 60

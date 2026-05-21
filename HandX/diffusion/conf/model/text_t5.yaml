@@ -1,0 +1,10 @@
+defaults:
+  - _base
+  - _self_
+
+cond_mode: text
+text_model: t5-base
+max_text_length: null
+arch: trans_dec_treble_residual
+cond_mask_prob: 0.1
+treble_mask_prob: 1.0  # Probability to keep each treble branch during training (1.0 = no masking, 0.5 = 50% mask)
