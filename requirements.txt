@@ -1,0 +1,11 @@
+opencv-python>=4.9.0
+mediapipe>=0.10.14
+numpy>=1.26.0
+pyyaml>=6.0.1
+tqdm>=4.66.0
+pillow>=10.0.0
+scipy>=1.11.0
+torch>=2.2.0
+transformers>=4.51.0
+accelerate>=0.30.0
+qwen-vl-utils>=0.0.8

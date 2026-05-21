@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Action Segment Output",
+  "type": "object",
+  "required": ["video_id", "segments"],
+  "properties": {
+    "video_id": { "type": "string" },
+    "segments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "chunk_id",
+          "start_time",
+          "end_time",
+          "action_label",
+          "movement_scale",
+          "confidence",
+          "hand_side"
+        ],
+        "properties": {
+          "chunk_id": { "type": "string" },
+          "start_time": { "type": "number" },
+          "end_time": { "type": "number" },
+          "start_frame": { "type": "integer" },
+          "end_frame": { "type": "integer" },
+          "action_label": { "type": "string" },
+          "movement_scale": { "enum": ["micro", "macro", "bimanual", "unknown"] },
+          "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+          "hand_side": { "enum": ["left", "right", "both", "unknown"] },
+          "summary": { "type": "string" },
+          "evidence": { "type": "string" },
+          "raw_model_output": { "type": "string" }
+        }
+      }
+    }
+  }
+}
+

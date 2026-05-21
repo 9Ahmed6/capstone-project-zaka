@@ -1,0 +1,59 @@
+[
+  {
+    "action_label": "open_hand",
+    "movement_scale": "micro",
+    "hand_side": "left_or_right",
+    "aliases": ["open palm", "fingers spread", "hand opens"],
+    "visual_cues": ["fingers are extended", "palm area is visible", "gaps appear between fingers"]
+  },
+  {
+    "action_label": "close_hand",
+    "movement_scale": "micro",
+    "hand_side": "left_or_right",
+    "aliases": ["fist", "hand closes", "fingers curl"],
+    "visual_cues": ["fingertips move toward palm", "finger joints bend", "hand becomes compact"]
+  },
+  {
+    "action_label": "pinch",
+    "movement_scale": "micro",
+    "hand_side": "left_or_right",
+    "aliases": ["thumb finger contact", "pinching", "precision grip"],
+    "visual_cues": ["thumb tip moves near a fingertip", "small contact area", "index finger often bends"]
+  },
+  {
+    "action_label": "wrist_rotation",
+    "movement_scale": "micro",
+    "hand_side": "left_or_right",
+    "aliases": ["wrist turns", "palm rotates", "hand rotates"],
+    "visual_cues": ["palm direction changes", "wrist angle changes", "finger positions rotate together"]
+  },
+  {
+    "action_label": "reach",
+    "movement_scale": "macro",
+    "hand_side": "left_or_right",
+    "aliases": ["hand reaches", "arm extends", "move hand toward target"],
+    "visual_cues": ["hand center moves across the frame", "distance to an object or area decreases"]
+  },
+  {
+    "action_label": "grasp",
+    "movement_scale": "macro",
+    "hand_side": "left_or_right",
+    "aliases": ["grab", "hold object", "gripping"],
+    "visual_cues": ["hand closes around visible object", "fingers curve around an object", "hand remains near object"]
+  },
+  {
+    "action_label": "two_hand_hold",
+    "movement_scale": "bimanual",
+    "hand_side": "both",
+    "aliases": ["both hands hold", "bimanual hold", "two hand support"],
+    "visual_cues": ["both hands are visible", "hands stay close to the same object", "left and right hands move together"]
+  },
+  {
+    "action_label": "hand_transfer",
+    "movement_scale": "bimanual",
+    "hand_side": "both",
+    "aliases": ["pass between hands", "transfer object", "handover"],
+    "visual_cues": ["hands approach each other", "one hand releases while the other stays near", "object changes side if visible"]
+  }
+]
+

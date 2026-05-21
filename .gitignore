@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.venv/
+outputs/clips/*.mp4
+outputs/json/*.npy
+outputs/json/*_segments.json
+

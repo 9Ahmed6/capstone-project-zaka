@@ -1,0 +1,21 @@
+[
+  {
+    "action_label": "open_hand",
+    "source": "seed",
+    "description": "Fingers extend away from the palm and the hand becomes more open.",
+    "movement_scale": "micro"
+  },
+  {
+    "action_label": "grasp",
+    "source": "seed",
+    "description": "The hand approaches an object area and fingers curl into a holding shape.",
+    "movement_scale": "macro"
+  },
+  {
+    "action_label": "two_hand_hold",
+    "source": "seed",
+    "description": "Both hands stay close together or near the same object while moving as a pair.",
+    "movement_scale": "bimanual"
+  }
+]
+
