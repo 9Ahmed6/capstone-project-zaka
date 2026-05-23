@@ -79,6 +79,7 @@ def compute_motion_signal(keypoints: np.ndarray) -> np.ndarray:
 def segment_motion_chunks(
     motion: np.ndarray,
     timestamps: list[float],
+    frame_numbers: list[int] | None = None,
     start_threshold: float = 0.02,
     end_threshold: float = 0.01,
     min_frames: int = 10,
@@ -96,21 +97,30 @@ def segment_motion_chunks(
             start_frame = frame_index
         elif start_frame is not None and value < end_threshold:
             if frame_index - start_frame >= min_frames:
-                chunks.append(_make_chunk(len(chunks), start_frame, frame_index, timestamps))
+                chunks.append(_make_chunk(len(chunks), start_frame, frame_index, timestamps, frame_numbers))
             start_frame = None
 
     if start_frame is not None and len(motion) - start_frame >= min_frames:
-        chunks.append(_make_chunk(len(chunks), start_frame, len(motion) - 1, timestamps))
+        chunks.append(_make_chunk(len(chunks), start_frame, len(motion) - 1, timestamps, frame_numbers))
 
     return chunks
 
 
-def _make_chunk(chunk_number: int, start_frame: int, end_frame: int, timestamps: list[float]) -> dict:
+def _make_chunk(
+    chunk_number: int,
+    start_index: int,
+    end_index: int,
+    timestamps: list[float],
+    frame_numbers: list[int] | None = None,
+) -> dict:
+    start_frame = frame_numbers[start_index] if frame_numbers else start_index
+    end_frame = frame_numbers[min(end_index, len(frame_numbers) - 1)] if frame_numbers else end_index
     return {
         "chunk_id": f"chunk_{chunk_number:03d}",
+        "start_index": int(start_index),
+        "end_index": int(end_index),
         "start_frame": int(start_frame),
         "end_frame": int(end_frame),
-        "start_time": float(timestamps[start_frame]),
-        "end_time": float(timestamps[min(end_frame, len(timestamps) - 1)]),
+        "start_time": float(timestamps[start_index]),
+        "end_time": float(timestamps[min(end_index, len(timestamps) - 1)]),
     }
-

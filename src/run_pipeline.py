@@ -6,16 +6,16 @@ from pathlib import Path
 
 import yaml
 
-from src.exporter import build_video_output, save_video_clip, write_json
+from src.exporter import build_video_output, save_video_clip_from_video, write_json
 from src.fusion import QwenVLAnnotator
 from src.hand_detection import (
-    extract_keypoints_handed,
+    extract_keypoints_handed_from_video,
     fill_missing_hand_tracks,
     mediapipe_to_handx_order,
     save_keypoints,
 )
 from src.handx_features import extract_handx_motion_features
-from src.video_pipeline import compute_motion_signal, extract_frames, segment_motion_chunks
+from src.video_pipeline import compute_motion_signal, segment_motion_chunks
 
 
 def run(video_path: str, settings_path: str = "configs/settings.yaml") -> dict:
@@ -23,13 +23,9 @@ def run(video_path: str, settings_path: str = "configs/settings.yaml") -> dict:
     video_path_obj = Path(video_path)
     video_id = video_path_obj.stem
 
-    frames, timestamps, fps = extract_frames(
+    keypoints, timestamps, fps, frame_numbers = extract_keypoints_handed_from_video(
         video_path_obj,
         frame_stride=settings["video"]["frame_stride"],
-    )
-
-    keypoints = extract_keypoints_handed(
-        frames,
         max_num_hands=settings["hand_detection"]["max_num_hands"],
         min_detection_confidence=settings["hand_detection"]["min_detection_confidence"],
         min_hand_presence_confidence=settings["hand_detection"]["min_hand_presence_confidence"],
@@ -44,6 +40,7 @@ def run(video_path: str, settings_path: str = "configs/settings.yaml") -> dict:
     chunks = segment_motion_chunks(
         motion,
         timestamps,
+        frame_numbers=frame_numbers,
         start_threshold=settings["chunking"]["start_threshold"],
         end_threshold=settings["chunking"]["end_threshold"],
         min_frames=settings["chunking"]["min_frames"],
@@ -57,7 +54,7 @@ def run(video_path: str, settings_path: str = "configs/settings.yaml") -> dict:
 
     segments = []
     for chunk in chunks:
-        clip_keypoints = handx_keypoints[chunk["start_frame"] : chunk["end_frame"] + 1]
+        clip_keypoints = handx_keypoints[chunk["start_index"] : chunk["end_index"] + 1]
         motion_clip = clip_keypoints if len(active_slots) > 1 else clip_keypoints[:, active_slots[0]]
         features = extract_handx_motion_features(
             motion_clip,
@@ -65,11 +62,10 @@ def run(video_path: str, settings_path: str = "configs/settings.yaml") -> dict:
             handx_diffusion_path=settings["handx"]["diffusion_path"],
         )
 
-        first_pass, first_raw = annotator.annotate_from_text(features, action_library)
-        refined, refined_raw = annotator.refine_with_frames(
-            first_pass,
-            frames,
-            timestamps,
+        refined, raw_model_output = annotator.annotate_chunk(
+            features,
+            action_library,
+            video_path_obj,
             chunk,
             max_frames=settings["video"]["max_frames_for_qwen"],
         )
@@ -82,14 +78,13 @@ def run(video_path: str, settings_path: str = "configs/settings.yaml") -> dict:
             "hand_side": refined.get("hand_side", "unknown"),
             "summary": refined.get("summary", ""),
             "evidence": refined.get("evidence", ""),
-            "first_pass_annotation": first_pass,
             "features": features,
-            "raw_model_output": refined_raw,
+            "raw_model_output": raw_model_output,
         }
         segments.append(segment)
 
         clip_path = Path(settings["paths"]["output_clip_dir"]) / f"{video_id}_{chunk['chunk_id']}.mp4"
-        save_video_clip(frames, chunk["start_frame"], chunk["end_frame"], fps, clip_path)
+        save_video_clip_from_video(video_path_obj, chunk["start_frame"], chunk["end_frame"], clip_path)
 
     output = build_video_output(video_id, segments)
     output_path = Path(settings["paths"]["output_json_dir"]) / f"{video_id}_segments.json"

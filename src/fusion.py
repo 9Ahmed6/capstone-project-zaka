@@ -70,6 +70,75 @@ class QwenVLAnnotator:
         raw_output = self._generate(messages, max_new_tokens=1400)
         return parse_json_object(raw_output), raw_output
 
+    def refine_with_video_frames(
+        self,
+        initial_annotation: dict,
+        video_path: str | Path,
+        chunk: dict,
+        max_frames: int = 8,
+    ) -> tuple[dict, str]:
+        """Reload only the sampled frames needed by Qwen-VL.
+
+        This is the memory-friendly version used by the main pipeline. The full
+        video is not kept in RAM.
+        """
+        sampled = sample_frames_for_qwen_from_video(video_path, chunk, max_frames=max_frames)
+        metadata = [{"frame_index": item["frame_index"], "time_sec": item["time_sec"]} for item in sampled]
+
+        prompt = VISION_PROMPT.format(
+            initial_annotation=json.dumps(initial_annotation, indent=2),
+            frame_metadata=json.dumps(metadata, indent=2),
+        )
+
+        content = [{"type": "text", "text": prompt}]
+        content.extend({"type": "image", "image": item["image"]} for item in sampled)
+        messages = [{"role": "user", "content": content}]
+
+        raw_output = self._generate(messages, max_new_tokens=1400)
+        return parse_json_object(raw_output), raw_output
+
+    def annotate_chunk(
+        self,
+        feature_json: dict,
+        action_library: list[dict],
+        video_path: str | Path,
+        chunk: dict,
+        max_frames: int = 8,
+    ) -> tuple[dict, str]:
+        """Annotate a chunk with one Qwen-VL call.
+
+        This sends the model everything it needs at once:
+        - HandX-style motion features
+        - the allowed action library
+        - chunk timestamps
+        - sampled frames from the original video
+        """
+        sampled = sample_frames_for_qwen_from_video(video_path, chunk, max_frames=max_frames)
+        metadata = [{"frame_index": item["frame_index"], "time_sec": item["time_sec"]} for item in sampled]
+
+        prompt = ONE_PASS_PROMPT.format(
+            chunk=json.dumps(
+                {
+                    "chunk_id": chunk["chunk_id"],
+                    "start_time": chunk["start_time"],
+                    "end_time": chunk["end_time"],
+                    "start_frame": chunk["start_frame"],
+                    "end_frame": chunk["end_frame"],
+                },
+                indent=2,
+            ),
+            action_library=json.dumps(action_library, indent=2),
+            features=compact_json(feature_json),
+            frame_metadata=json.dumps(metadata, indent=2),
+        )
+
+        content = [{"type": "text", "text": prompt}]
+        content.extend({"type": "image", "image": item["image"]} for item in sampled)
+        messages = [{"role": "user", "content": content}]
+
+        raw_output = self._generate(messages, max_new_tokens=1400)
+        return parse_json_object(raw_output), raw_output
+
     def _generate(self, messages: list[dict], max_new_tokens: int) -> str:
         prompt = self.processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
         image_inputs, video_inputs = process_vision_info(messages)
@@ -124,6 +193,54 @@ def sample_frames_for_qwen(
                 "image": Image.fromarray(rgb),
             }
         )
+    return sampled
+
+
+def sample_frames_for_qwen_from_video(
+    video_path: str | Path,
+    chunk: dict,
+    max_frames: int = 8,
+    max_image_side: int = 640,
+) -> list[dict]:
+    """Read only a few frames from a chunk for Qwen-VL.
+
+    The chunk stores original video frame numbers, so this function can seek
+    directly to those frames without loading the whole video.
+    """
+    cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        raise FileNotFoundError(f"Could not open video: {video_path}")
+
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    start_frame = int(chunk["start_frame"])
+    end_frame = int(chunk["end_frame"])
+    count = min(max_frames, max(1, end_frame - start_frame + 1))
+    frame_indices = np.linspace(start_frame, end_frame, num=count, dtype=int)
+
+    sampled = []
+    try:
+        for frame_index in frame_indices:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, int(frame_index))
+            ok, frame = cap.read()
+            if not ok:
+                continue
+
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            image = Image.fromarray(rgb)
+            image.thumbnail((max_image_side, max_image_side))
+            sampled.append(
+                {
+                    "frame_index": int(frame_index),
+                    "time_sec": float(frame_index / fps),
+                    "image": image,
+                }
+            )
+    finally:
+        cap.release()
+
+    if not sampled:
+        raise ValueError(f"Could not sample frames for chunk {chunk.get('chunk_id', '<unknown>')}")
+
     return sampled
 
 
@@ -186,6 +303,45 @@ Rules:
 
 Initial text-only annotation:
 {initial_annotation}
+
+Sampled frame metadata:
+{frame_metadata}
+"""
+
+
+ONE_PASS_PROMPT = """You are an expert in hand-motion analysis.
+
+You will receive:
+1. A video chunk with timestamps.
+2. A controlled action library.
+3. HandX-style motion features for the chunk.
+4. Sampled frames from that same chunk.
+
+Return only valid JSON with this schema:
+{{
+  "action_label": "one label from the action library or unknown",
+  "movement_scale": "micro, macro, bimanual, or unknown",
+  "hand_side": "left, right, both, or unknown",
+  "confidence": 0.0,
+  "summary": "short visible description of the hand action",
+  "evidence": "what features and frames support the label"
+}}
+
+Rules:
+- Choose labels from the action library when possible.
+- Use "unknown" if no action label clearly matches.
+- Describe physical motion only: finger bending, hand opening, wrist movement, hand travel, contact, or two-hand relation.
+- Do not guess the person's intention.
+- Use confidence below 0.6 if the frames or features are unclear.
+
+Video chunk:
+{chunk}
+
+Action library:
+{action_library}
+
+HandX-style features:
+{features}
 
 Sampled frame metadata:
 {frame_metadata}

@@ -44,10 +44,52 @@ def save_video_clip(
         writer.release()
 
 
+def save_video_clip_from_video(
+    video_path: str | Path,
+    start_frame: int,
+    end_frame: int,
+    output_path: str | Path,
+) -> None:
+    """Save a clip by rereading only the needed frame range from the video."""
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        raise FileNotFoundError(f"Could not open video: {video_path}")
+
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    cap.set(cv2.CAP_PROP_POS_FRAMES, int(start_frame))
+
+    writer = None
+    current_frame = int(start_frame)
+
+    try:
+        while current_frame <= int(end_frame):
+            ok, frame = cap.read()
+            if not ok:
+                break
+
+            if writer is None:
+                height, width = frame.shape[:2]
+                writer = cv2.VideoWriter(
+                    str(output_path),
+                    cv2.VideoWriter_fourcc(*"mp4v"),
+                    fps,
+                    (width, height),
+                )
+
+            writer.write(frame)
+            current_frame += 1
+    finally:
+        cap.release()
+        if writer is not None:
+            writer.release()
+
+
 def build_video_output(video_id: str, segments: list[dict]) -> dict:
     """Create the final JSON shape required by the schema."""
     return {
         "video_id": video_id,
         "segments": segments,
     }
-
