@@ -22,7 +22,7 @@ hand_detection:
 
 chunking:
   start_threshold: 0.02
-  end_threshold: 0.01
+  end_threshold: 0.007
   min_frames: 10
 
 qwen:
