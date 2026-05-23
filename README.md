@@ -61,36 +61,42 @@ The pipeline runs in this order:
 
 ```text
 Video
- -> Extract frames
+ -> Read one frame at a time
  -> Detect hand landmarks with MediaPipe
+ -> Store only keypoints, timestamps, and original frame numbers
  -> Convert landmarks to HandX joint order
  -> Measure hand motion
  -> Split video into action chunks
  -> Extract HandX-style motion features
  -> Load the action library
- -> Use Qwen-VL as a text-only LLM
- -> Use the same Qwen-VL as a visual VLM
+ -> Reload only 4-8 sampled frames from each chunk
+ -> Use Qwen-VL once with features, action library, and frames
  -> Save JSON results and video clips
  -> Optionally calculate baseline metrics
 ```
 
 ## Step-By-Step Explanation
 
-### 1. Load the Video
+### 1. Preprocess the Video Frame By Frame
 
-The project reads the video using OpenCV.
+The project reads the video using OpenCV, but the main runner does not store the whole video in RAM.
 
 Main file:
 
 ```text
-src/video_pipeline.py
+src/hand_detection.py
 ```
 
-The function `extract_frames()` turns the video into:
+The function `extract_keypoints_handed_from_video()` reads one frame, detects hands, stores the keypoints, then moves to the next frame.
 
-- a list of frames
-- timestamps for each frame
-- the video FPS
+It stores:
+
+- hand keypoints
+- timestamps
+- original video frame numbers
+- video FPS
+
+It does not store all raw frames.
 
 ### 2. Detect Hands
 
@@ -200,7 +206,7 @@ If HandX is not available, the project still runs with a simple fallback feature
 This makes the project easier to test.
 Currently, the necessary HandX files are added to the repo. 
 
-### 8. Use Qwen-VL as the LLM
+### 8. Use Qwen-VL Once Per Chunk
 
 Main file:
 
@@ -210,14 +216,16 @@ src/fusion.py
 
 This project uses **one Qwen-VL model** for both language and vision.
 
-First, it sends only text to Qwen-VL including:
+For each action chunk, it sends Qwen-VL:
 
 - HandX-style features
 - action library
+- chunk timestamps
+- sampled video frames
 
-At this stage, Qwen-VL acts like the LLM.
+This is a one-pass call. Qwen-VL sees the motion features, the allowed labels, and the visual frames at the same time.
 
-It creates a first guess, such as:
+It creates the final chunk annotation, such as:
 
 ```json
 {
@@ -238,13 +246,14 @@ Main file:
 schemas/action_library.json
 ```
 
-The video pipeline detects hands or split the video into chunks. Then the action library is loaded after the system has already created a motion chunk and extracted HandX-style features from that chunk.
+The video pipeline detects hands and splits the video into chunks first. Then the action library is loaded after the system has already created a motion chunk and extracted HandX-style features from that chunk.
 
 At that point, Qwen-VL receives:
 
 - the motion features for one chunk
 - the list of allowed action labels
 - visual cues for each action label
+- sampled frames from that chunk
 
 The action library acts like the system's controlled vocabulary. It tells Qwen-VL which labels it should choose from.
 
@@ -287,21 +296,9 @@ The action library explains what labels are allowed.
 Qwen-VL chooses the best label and writes the description.
 ```
 
-### 9. Use the Same Qwen-VL as the VLM
+This keeps RAM much lower because Qwen sees only a few selected frames per chunk, not the full video.
 
-Next, the project samples a few frames from the action chunk.
-
-It sends Qwen-VL:
-
-- the first text-only annotation
-- sampled video frames
-- frame timestamps
-
-At this stage, the same Qwen-VL model acts like the VLM.
-
-It checks what is visible in the frames and improves the annotation.
-
-### 10. Save Results
+### 9. Save Results
 
 Main file:
 
@@ -321,7 +318,7 @@ outputs/json/
 outputs/clips/
 ```
 
-### 11. Evaluate the Week 5 Baseline
+### 10. Evaluate the Week 5 Baseline
 
 Main file:
 
