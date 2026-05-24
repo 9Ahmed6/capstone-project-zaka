@@ -346,4 +346,3 @@ HandX-style features:
 Sampled frame metadata:
 {frame_metadata}
 """
-

@@ -9,7 +9,7 @@ paths:
   baseline_results: "evaluation/baseline_results.json"
 
 video:
-  frame_stride: 4
+  frame_stride: 1
   max_frames_for_qwen: 8
 
 hand_detection:
@@ -22,8 +22,8 @@ hand_detection:
 
 chunking:
   start_threshold: 0.02
-  end_threshold: 0.005
-  min_frames: 20
+  end_threshold: 0.01
+  min_frames: 10
 
 qwen:
   # One Qwen-VL model is used for both text-only and image-aware prompts.
