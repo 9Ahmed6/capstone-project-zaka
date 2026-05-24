@@ -9,7 +9,7 @@ paths:
   baseline_results: "evaluation/baseline_results.json"
 
 video:
-  frame_stride: 1
+  frame_stride: 4
   max_frames_for_qwen: 8
 
 hand_detection:
