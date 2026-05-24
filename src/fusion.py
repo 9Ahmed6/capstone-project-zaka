@@ -13,8 +13,9 @@ from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
 
 from src.handx_features import compact_json
 
-DEFAULT_MAX_FRAMES = 6
-DEFAULT_MAX_IMAGE_SIDE = 512
+DEFAULT_MAX_FRAMES = 4
+DEFAULT_MAX_IMAGE_SIDE = 384
+DEFAULT_MAX_NEW_TOKENS = 512
 
 
 class QwenVLAnnotator:
@@ -29,6 +30,7 @@ class QwenVLAnnotator:
             model_id,
             torch_dtype=dtype,
             device_map="auto",
+            low_cpu_mem_usage=True,
         )
         self.model.eval()
 
@@ -40,6 +42,7 @@ class QwenVLAnnotator:
         chunk: dict,
         max_frames: int = DEFAULT_MAX_FRAMES,
         max_image_side: int = DEFAULT_MAX_IMAGE_SIDE,
+        max_new_tokens: int = DEFAULT_MAX_NEW_TOKENS,
     ) -> tuple[dict, str]:
         """Annotate a chunk with a single Qwen-VL request."""
         sampled = sample_frames_for_qwen_from_video(
@@ -73,7 +76,7 @@ class QwenVLAnnotator:
         content.extend({"type": "image", "image": item["image"]} for item in sampled)
         messages = [{"role": "user", "content": content}]
 
-        raw_output = self._generate(messages, max_new_tokens=1400)
+        raw_output = self._generate(messages, max_new_tokens=max_new_tokens)
         return parse_json_object(raw_output), raw_output
 
     def _generate(self, messages: list[dict], max_new_tokens: int) -> str:
@@ -98,7 +101,7 @@ class QwenVLAnnotator:
                 max_new_tokens=max_new_tokens,
                 temperature=self.temperature,
                 do_sample=self.temperature > 0,
-                use_cache=True,
+                use_cache=False,
             )
 
         generated_trimmed = [
