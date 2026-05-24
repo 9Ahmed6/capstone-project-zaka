@@ -13,89 +13,24 @@ from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
 
 from src.handx_features import compact_json
 
+DEFAULT_MAX_FRAMES = 6
+DEFAULT_MAX_IMAGE_SIDE = 512
+
 
 class QwenVLAnnotator:
-    """Use one Qwen-VL model as both the LLM and VLM."""
+    """One-shot Qwen-VL chunk annotator optimized for low GPU usage."""
 
     def __init__(self, model_id: str, temperature: float = 0.2):
         self.model_id = model_id
         self.temperature = temperature
         self.processor = AutoProcessor.from_pretrained(model_id)
+        dtype = torch.float16 if torch.cuda.is_available() else torch.float32
         self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
             model_id,
-            torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
+            torch_dtype=dtype,
             device_map="auto",
         )
-
-    def annotate_from_text(self, feature_json: dict, action_library: list[dict]) -> tuple[dict, str]:
-        """Use Qwen-VL with a text-only prompt.
-
-        This replaces the separate LLM from the original notebook.
-        """
-        prompt = TEXT_ONLY_PROMPT.format(
-            action_library=json.dumps(action_library, indent=2),
-            features=compact_json(feature_json),
-        )
-        messages = [{"role": "user", "content": [{"type": "text", "text": prompt}]}]
-        raw_output = self._generate(messages, max_new_tokens=1200)
-        return parse_json_object(raw_output), raw_output
-
-    def refine_with_frames(
-        self,
-        initial_annotation: dict,
-        frames: list[np.ndarray],
-        timestamps: list[float],
-        chunk: dict,
-        max_frames: int = 8,
-    ) -> tuple[dict, str]:
-        """Use Qwen-VL with sampled frames for visual refinement."""
-        sampled = sample_frames_for_qwen(
-            frames,
-            timestamps,
-            chunk["start_frame"],
-            chunk["end_frame"],
-            max_frames=max_frames,
-        )
-        metadata = [{"frame_index": item["frame_index"], "time_sec": item["time_sec"]} for item in sampled]
-
-        prompt = VISION_PROMPT.format(
-            initial_annotation=json.dumps(initial_annotation, indent=2),
-            frame_metadata=json.dumps(metadata, indent=2),
-        )
-
-        content = [{"type": "text", "text": prompt}]
-        content.extend({"type": "image", "image": item["image"]} for item in sampled)
-        messages = [{"role": "user", "content": content}]
-
-        raw_output = self._generate(messages, max_new_tokens=1400)
-        return parse_json_object(raw_output), raw_output
-
-    def refine_with_video_frames(
-        self,
-        initial_annotation: dict,
-        video_path: str | Path,
-        chunk: dict,
-        max_frames: int = 8,
-    ) -> tuple[dict, str]:
-        """Reload only the sampled frames needed by Qwen-VL.
-
-        This is the memory-friendly version used by the main pipeline. The full
-        video is not kept in RAM.
-        """
-        sampled = sample_frames_for_qwen_from_video(video_path, chunk, max_frames=max_frames)
-        metadata = [{"frame_index": item["frame_index"], "time_sec": item["time_sec"]} for item in sampled]
-
-        prompt = VISION_PROMPT.format(
-            initial_annotation=json.dumps(initial_annotation, indent=2),
-            frame_metadata=json.dumps(metadata, indent=2),
-        )
-
-        content = [{"type": "text", "text": prompt}]
-        content.extend({"type": "image", "image": item["image"]} for item in sampled)
-        messages = [{"role": "user", "content": content}]
-
-        raw_output = self._generate(messages, max_new_tokens=1400)
-        return parse_json_object(raw_output), raw_output
+        self.model.eval()
 
     def annotate_chunk(
         self,
@@ -103,18 +38,20 @@ class QwenVLAnnotator:
         action_library: list[dict],
         video_path: str | Path,
         chunk: dict,
-        max_frames: int = 8,
+        max_frames: int = DEFAULT_MAX_FRAMES,
+        max_image_side: int = DEFAULT_MAX_IMAGE_SIDE,
     ) -> tuple[dict, str]:
-        """Annotate a chunk with one Qwen-VL call.
-
-        This sends the model everything it needs at once:
-        - HandX-style motion features
-        - the allowed action library
-        - chunk timestamps
-        - sampled frames from the original video
-        """
-        sampled = sample_frames_for_qwen_from_video(video_path, chunk, max_frames=max_frames)
-        metadata = [{"frame_index": item["frame_index"], "time_sec": item["time_sec"]} for item in sampled]
+        """Annotate a chunk with a single Qwen-VL request."""
+        sampled = sample_frames_for_qwen_from_video(
+            video_path=video_path,
+            chunk=chunk,
+            max_frames=max_frames,
+            max_image_side=max_image_side,
+        )
+        metadata = [
+            {"frame_index": item["frame_index"], "time_sec": item["time_sec"]}
+            for item in sampled
+        ]
 
         prompt = ONE_PASS_PROMPT.format(
             chunk=json.dumps(
@@ -140,7 +77,11 @@ class QwenVLAnnotator:
         return parse_json_object(raw_output), raw_output
 
     def _generate(self, messages: list[dict], max_new_tokens: int) -> str:
-        prompt = self.processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        prompt = self.processor.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+        )
         image_inputs, video_inputs = process_vision_info(messages)
 
         inputs = self.processor(
@@ -151,12 +92,13 @@ class QwenVLAnnotator:
             return_tensors="pt",
         ).to(self.model.device)
 
-        with torch.no_grad():
+        with torch.inference_mode():
             generated_ids = self.model.generate(
                 **inputs,
                 max_new_tokens=max_new_tokens,
                 temperature=self.temperature,
                 do_sample=self.temperature > 0,
+                use_cache=True,
             )
 
         generated_trimmed = [
@@ -170,37 +112,11 @@ class QwenVLAnnotator:
         )[0]
 
 
-def sample_frames_for_qwen(
-    frames: list[np.ndarray],
-    timestamps: list[float],
-    start_frame: int,
-    end_frame: int,
-    max_frames: int = 8,
-) -> list[dict]:
-    """Pick a small number of frames from a chunk."""
-    start_frame = max(0, start_frame)
-    end_frame = min(end_frame, len(frames) - 1)
-    count = min(max_frames, end_frame - start_frame + 1)
-    indices = np.linspace(start_frame, end_frame, num=count, dtype=int)
-
-    sampled = []
-    for frame_index in indices:
-        rgb = cv2.cvtColor(frames[frame_index], cv2.COLOR_BGR2RGB)
-        sampled.append(
-            {
-                "frame_index": int(frame_index),
-                "time_sec": float(timestamps[frame_index]),
-                "image": Image.fromarray(rgb),
-            }
-        )
-    return sampled
-
-
 def sample_frames_for_qwen_from_video(
     video_path: str | Path,
     chunk: dict,
-    max_frames: int = 8,
-    max_image_side: int = 640,
+    max_frames: int = DEFAULT_MAX_FRAMES,
+    max_image_side: int = DEFAULT_MAX_IMAGE_SIDE,
 ) -> list[dict]:
     """Read only a few frames from a chunk for Qwen-VL.
 
