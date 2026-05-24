@@ -13,26 +13,20 @@ from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
 
 from src.handx_features import compact_json
 
-DEFAULT_MAX_FRAMES = 4
-DEFAULT_MAX_IMAGE_SIDE = 384
-DEFAULT_MAX_NEW_TOKENS = 512
-
 
 class QwenVLAnnotator:
-    """One-shot Qwen-VL chunk annotator optimized for low GPU usage."""
+    """Run one Qwen-VL call per chunk, with optional frame support."""
 
     def __init__(self, model_id: str, temperature: float = 0.2):
         self.model_id = model_id
         self.temperature = temperature
         self.processor = AutoProcessor.from_pretrained(model_id)
-        dtype = torch.float16 if torch.cuda.is_available() else torch.float32
         self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
             model_id,
-            torch_dtype=dtype,
+            torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
             device_map="auto",
             low_cpu_mem_usage=True,
         )
-        self.model.eval()
 
     def annotate_chunk(
         self,
@@ -40,71 +34,103 @@ class QwenVLAnnotator:
         action_library: list[dict],
         video_path: str | Path,
         chunk: dict,
-        max_frames: int = DEFAULT_MAX_FRAMES,
-        max_image_side: int = DEFAULT_MAX_IMAGE_SIDE,
-        max_new_tokens: int = DEFAULT_MAX_NEW_TOKENS,
+        max_frames: int = 0,
+        max_new_tokens: int = 1400,
     ) -> tuple[dict, str]:
-        """Annotate a chunk with a single Qwen-VL request."""
-        sampled = sample_frames_for_qwen_from_video(
-            video_path=video_path,
-            chunk=chunk,
-            max_frames=max_frames,
-            max_image_side=max_image_side,
-        )
-        metadata = [
-            {"frame_index": item["frame_index"], "time_sec": item["time_sec"]}
-            for item in sampled
-        ]
+        """Annotate one video chunk with a single Qwen-VL request."""
+        sampled = self._load_sampled_frames(video_path, chunk, max_frames=max_frames) if max_frames > 0 else []
 
         prompt = ONE_PASS_PROMPT.format(
             chunk=json.dumps(
                 {
-                    "chunk_id": chunk["chunk_id"],
-                    "start_time": chunk["start_time"],
-                    "end_time": chunk["end_time"],
-                    "start_frame": chunk["start_frame"],
-                    "end_frame": chunk["end_frame"],
+                    "chunk_id": chunk.get("chunk_id"),
+                    "start_time": chunk.get("start_time"),
+                    "end_time": chunk.get("end_time"),
+                    "start_frame": chunk.get("start_frame"),
+                    "end_frame": chunk.get("end_frame"),
                 },
                 indent=2,
             ),
             action_library=json.dumps(action_library, indent=2),
             features=compact_json(feature_json),
-            frame_metadata=json.dumps(metadata, indent=2),
+            frame_metadata=json.dumps(
+                [
+                    {"frame_index": item["frame_index"], "time_sec": item["time_sec"]}
+                    for item in sampled
+                ],
+                indent=2,
+            ),
         )
 
         content = [{"type": "text", "text": prompt}]
         content.extend({"type": "image", "image": item["image"]} for item in sampled)
         messages = [{"role": "user", "content": content}]
 
-        max_new_tokens = min(max_new_tokens, DEFAULT_MAX_NEW_TOKENS)
         raw_output = self._generate(messages, max_new_tokens=max_new_tokens)
         return parse_json_object(raw_output), raw_output
 
+    def _load_sampled_frames(
+        self,
+        video_path: str | Path,
+        chunk: dict,
+        max_frames: int = 4,
+        max_image_side: int = 640,
+    ) -> list[dict]:
+        start_frame = int(chunk.get("start_frame", 0))
+        end_frame = int(chunk.get("end_frame", start_frame))
+        if end_frame < start_frame:
+            end_frame = start_frame
+
+        cap = cv2.VideoCapture(str(video_path))
+        if not cap.isOpened():
+            raise FileNotFoundError(f"Could not open video: {video_path}")
+
+        frame_count = max(1, end_frame - start_frame + 1)
+        samples = min(max_frames, frame_count)
+        indices = np.linspace(start_frame, end_frame, num=samples, dtype=int).tolist()
+
+        sampled = []
+        fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        try:
+            for frame_index in indices:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, int(frame_index))
+                ok, frame = cap.read()
+                if not ok:
+                    continue
+
+                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                image = Image.fromarray(rgb)
+                image.thumbnail((max_image_side, max_image_side))
+                sampled.append(
+                    {
+                        "frame_index": int(frame_index),
+                        "time_sec": float(frame_index / fps),
+                        "image": image,
+                    }
+                )
+        finally:
+            cap.release()
+
+        return sampled
+
     def _generate(self, messages: list[dict], max_new_tokens: int) -> str:
-        prompt = self.processor.apply_chat_template(
-            messages,
-            tokenize=False,
-            add_generation_prompt=True,
-        )
+        prompt = self.processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
         image_inputs, video_inputs = process_vision_info(messages)
 
-        inputs = self.processor(
-            text=[prompt],
-            images=image_inputs,
-            videos=video_inputs,
-            padding=True,
-            return_tensors="pt",
-        ).to(self.model.device)
+        kwargs = {"text": [prompt], "padding": True, "return_tensors": "pt"}
+        if image_inputs:
+            kwargs["images"] = image_inputs
+        if video_inputs:
+            kwargs["videos"] = video_inputs
 
-        with torch.inference_mode():
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+        inputs = self.processor(**kwargs).to(self.model.device)
+
+        with torch.no_grad():
             generated_ids = self.model.generate(
                 **inputs,
                 max_new_tokens=max_new_tokens,
                 temperature=self.temperature,
                 do_sample=self.temperature > 0,
-                use_cache=False,
             )
 
         generated_trimmed = [
@@ -118,56 +144,7 @@ class QwenVLAnnotator:
         )[0]
 
 
-def sample_frames_for_qwen_from_video(
-    video_path: str | Path,
-    chunk: dict,
-    max_frames: int = DEFAULT_MAX_FRAMES,
-    max_image_side: int = DEFAULT_MAX_IMAGE_SIDE,
-) -> list[dict]:
-    """Read only a few frames from a chunk for Qwen-VL.
-
-    The chunk stores original video frame numbers, so this function can seek
-    directly to those frames without loading the whole video.
-    """
-    cap = cv2.VideoCapture(str(video_path))
-    if not cap.isOpened():
-        raise FileNotFoundError(f"Could not open video: {video_path}")
-
-    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    start_frame = int(chunk["start_frame"])
-    end_frame = int(chunk["end_frame"])
-    count = min(max_frames, max(1, end_frame - start_frame + 1))
-    frame_indices = np.linspace(start_frame, end_frame, num=count, dtype=int)
-
-    sampled = []
-    try:
-        for frame_index in frame_indices:
-            cap.set(cv2.CAP_PROP_POS_FRAMES, int(frame_index))
-            ok, frame = cap.read()
-            if not ok:
-                continue
-
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            image = Image.fromarray(rgb)
-            image.thumbnail((max_image_side, max_image_side))
-            sampled.append(
-                {
-                    "frame_index": int(frame_index),
-                    "time_sec": float(frame_index / fps),
-                    "image": image,
-                }
-            )
-    finally:
-        cap.release()
-
-    if not sampled:
-        raise ValueError(f"Could not sample frames for chunk {chunk.get('chunk_id', '<unknown>')}")
-
-    return sampled
-
-
 def parse_json_object(text: str) -> dict:
-    """Extract the first JSON object from a model response."""
     text = text.strip()
     text = re.sub(r"^```(?:json)?", "", text).strip()
     text = re.sub(r"```$", "", text).strip()
@@ -180,57 +157,6 @@ def parse_json_object(text: str) -> dict:
     return json.loads(text[start : end + 1])
 
 
-TEXT_ONLY_PROMPT = """You are an expert in hand-motion analysis.
-
-Use the HandX-style feature JSON and action library to create a first action guess.
-Return only valid JSON with this schema:
-{{
-  "action_label": "one label from the action library or unknown",
-  "movement_scale": "micro, macro, bimanual, or unknown",
-  "hand_side": "left, right, both, or unknown",
-  "confidence": 0.0,
-  "summary": "short physical motion description",
-  "evidence": "which feature values support the guess"
-}}
-
-Rules:
-- Describe physical motion only.
-- Do not guess the person's intention.
-- Use confidence below 0.6 when the features are weak.
-
-Action library:
-{action_library}
-
-HandX-style features:
-{features}
-"""
-
-
-VISION_PROMPT = """You are refining a hand-motion annotation using video frames.
-
-Return only valid JSON with this schema:
-{{
-  "action_label": "one final action label or unknown",
-  "movement_scale": "micro, macro, bimanual, or unknown",
-  "hand_side": "left, right, both, or unknown",
-  "confidence": 0.0,
-  "summary": "visible motion across the chunk",
-  "evidence": "what the sampled frames show"
-}}
-
-Rules:
-- Prefer visible hand pose, finger bending, wrist movement, hand distance, and object contact.
-- Do not invent object purpose or gesture meaning.
-- If the frames are unclear, keep the label unknown and lower confidence.
-
-Initial text-only annotation:
-{initial_annotation}
-
-Sampled frame metadata:
-{frame_metadata}
-"""
-
-
 ONE_PASS_PROMPT = """You are an expert in hand-motion analysis.
 
 You will receive:
@@ -240,14 +166,14 @@ You will receive:
 4. Sampled frames from that same chunk.
 
 Return only valid JSON with this schema:
-{{
+{
   "action_label": "one label from the action library or unknown",
   "movement_scale": "micro, macro, bimanual, or unknown",
   "hand_side": "left, right, both, or unknown",
   "confidence": 0.0,
   "summary": "short visible description of the hand action",
   "evidence": "what features and frames support the label"
-}}
+}
 
 Rules:
 - Choose labels from the action library when possible.
