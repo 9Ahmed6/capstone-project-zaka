@@ -37,7 +37,7 @@ class QwenVLAnnotator:
             features=compact_json(feature_json),
         )
         messages = [{"role": "user", "content": [{"type": "text", "text": prompt}]}]
-        raw_output = self._generate(messages, max_new_tokens=1200)
+        raw_output = self._generate(messages, max_new_tokens=600)
         return parse_json_object(raw_output), raw_output
 
     def refine_with_frames(
