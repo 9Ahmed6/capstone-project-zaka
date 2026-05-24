@@ -22,8 +22,8 @@ hand_detection:
 
 chunking:
   start_threshold: 0.02
-  end_threshold: 0.007
-  min_frames: 10
+  end_threshold: 0.005
+  min_frames: 20
 
 qwen:
   # One Qwen-VL model is used for both text-only and image-aware prompts.

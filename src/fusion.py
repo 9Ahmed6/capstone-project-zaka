@@ -76,6 +76,7 @@ class QwenVLAnnotator:
         content.extend({"type": "image", "image": item["image"]} for item in sampled)
         messages = [{"role": "user", "content": content}]
 
+        max_new_tokens = min(max_new_tokens, DEFAULT_MAX_NEW_TOKENS)
         raw_output = self._generate(messages, max_new_tokens=max_new_tokens)
         return parse_json_object(raw_output), raw_output
 
@@ -96,6 +97,8 @@ class QwenVLAnnotator:
         ).to(self.model.device)
 
         with torch.inference_mode():
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
             generated_ids = self.model.generate(
                 **inputs,
                 max_new_tokens=max_new_tokens,
