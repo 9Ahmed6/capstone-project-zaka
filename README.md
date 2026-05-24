@@ -7,7 +7,7 @@ Guidance and project idea: Rabih Amhaz @ RA Development
 
 Team Members:
 
-    Nihal Alzubair
+    Nihal Elzubair
     Abdulla Mohamed
     Ahmed Mohamed
  
