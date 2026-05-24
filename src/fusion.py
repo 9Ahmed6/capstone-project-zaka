@@ -136,7 +136,7 @@ class QwenVLAnnotator:
         content.extend({"type": "image", "image": item["image"]} for item in sampled)
         messages = [{"role": "user", "content": content}]
 
-        raw_output = self._generate(messages, max_new_tokens=1400)
+        raw_output = self._generate(messages, max_new_tokens=256)
         return parse_json_object(raw_output), raw_output
 
     def _generate(self, messages: list[dict], max_new_tokens: int) -> str:
