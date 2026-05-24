@@ -166,14 +166,14 @@ You will receive:
 4. Sampled frames from that same chunk.
 
 Return only valid JSON with this schema:
-{
+{{
   "action_label": "one label from the action library or unknown",
   "movement_scale": "micro, macro, bimanual, or unknown",
   "hand_side": "left, right, both, or unknown",
   "confidence": 0.0,
   "summary": "short visible description of the hand action",
   "evidence": "what features and frames support the label"
-}
+}}
 
 Rules:
 - Choose labels from the action library when possible.
