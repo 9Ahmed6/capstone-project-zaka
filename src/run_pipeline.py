@@ -68,7 +68,6 @@ def run(video_path: str, settings_path: str = "configs/settings.yaml") -> dict:
             video_path_obj,
             chunk,
             max_frames=settings["video"]["max_frames_for_qwen"],
-            max_new_tokens=settings["qwen"]["max_new_tokens_vision"],
         )
 
         segment = {
@@ -105,3 +104,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
