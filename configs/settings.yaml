@@ -10,7 +10,7 @@ paths:
 
 video:
   frame_stride: 1
-  max_frames_for_qwen: 8
+  max_frames_for_qwen: 4
 
 hand_detection:
   max_num_hands: 2

@@ -75,7 +75,7 @@ class QwenVLAnnotator:
         initial_annotation: dict,
         video_path: str | Path,
         chunk: dict,
-        max_frames: int = 8,
+        max_frames: int = 4,
     ) -> tuple[dict, str]:
         """Reload only the sampled frames needed by Qwen-VL.
 
@@ -136,7 +136,7 @@ class QwenVLAnnotator:
         content.extend({"type": "image", "image": item["image"]} for item in sampled)
         messages = [{"role": "user", "content": content}]
 
-        raw_output = self._generate(messages, max_new_tokens=256)
+        raw_output = self._generate(messages, max_new_tokens=1400)
         return parse_json_object(raw_output), raw_output
 
     def _generate(self, messages: list[dict], max_new_tokens: int) -> str:
