@@ -62,9 +62,15 @@ def run(video_path: str, settings_path: str = "configs/settings.yaml") -> dict:
             handx_diffusion_path=settings["handx"]["diffusion_path"],
         )
 
-        refined, raw_model_output = annotator.annotate_chunk(
+        # Step 1: Text-only annotation
+        initial, text_output = annotator.annotate_from_text(
             features,
             action_library,
+        )
+
+        # Step 2: Refine with video frames
+        refined, refined_output = annotator.refine_with_video_frames(
+            initial,
             video_path_obj,
             chunk,
             max_frames=settings["video"]["max_frames_for_qwen"],
@@ -79,7 +85,10 @@ def run(video_path: str, settings_path: str = "configs/settings.yaml") -> dict:
             "summary": refined.get("summary", ""),
             "evidence": refined.get("evidence", ""),
             "features": features,
-            "raw_model_output": raw_model_output,
+            "text_annotation": initial,
+            "text_output": text_output,
+            "refined_annotation": refined,
+            "refined_output": refined_output,
         }
         segments.append(segment)
 
