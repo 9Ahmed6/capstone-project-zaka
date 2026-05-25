@@ -130,7 +130,13 @@ class QwenVideoRefiner:
         if video_inputs:
             kwargs["videos"] = video_inputs
 
-        inputs = self.processor(**kwargs).to(self.model.device)
+        inputs = self.processor(
+            **kwargs,
+            padding=True,
+            truncation=True,
+            max_length=2048,
+            return_tensors="pt",
+        ).to(self.model.device)
 
         with torch.no_grad():
             generated_ids = self.model.generate(

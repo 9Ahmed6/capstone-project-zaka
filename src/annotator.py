@@ -33,7 +33,7 @@ class QwenTextAnnotator:
         self,
         feature_json: dict,
         action_library: list[dict],
-        max_new_tokens: int = 800,
+        max_new_tokens: int = 400,
     ) -> tuple[dict, str]:
         """Run text-only annotation on motion features.
         
@@ -47,7 +47,7 @@ class QwenTextAnnotator:
         """
         prompt = TEXT_ONLY_PROMPT.format(
             action_library=json.dumps(action_library, indent=2),
-            features=compact_json(feature_json),
+            features=compact_json(feature_json, max_chars=3000),
         )
         messages = [{"role": "user", "content": [{"type": "text", "text": prompt}]}]
         raw_output = self._generate(messages, max_new_tokens=max_new_tokens)
@@ -59,6 +59,8 @@ class QwenTextAnnotator:
         inputs = self.processor(
             text=[prompt],
             padding=True,
+            truncation=True,
+            max_length=2048,
             return_tensors="pt",
         ).to(self.model.device)
 
@@ -99,10 +101,15 @@ def parse_json_object(text: str) -> dict:
 
 def load_qwen_model(model_id: str, temperature: float = 0.2):
     processor = AutoProcessor.from_pretrained(model_id)
+    max_memory = {"cpu": "32GB"}
+    if torch.cuda.is_available():
+        max_memory["cuda:0"] = "10GB"
+
     model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
         model_id,
         torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
         device_map="auto",
+        max_memory=max_memory,
         low_cpu_mem_usage=True,
     )
     return processor, model
