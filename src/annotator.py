@@ -101,17 +101,30 @@ def parse_json_object(text: str) -> dict:
 
 def load_qwen_model(model_id: str, temperature: float = 0.2):
     processor = AutoProcessor.from_pretrained(model_id)
-    max_memory = {"cpu": "32GB"}
-    if torch.cuda.is_available():
-        max_memory["cuda:0"] = "10GB"
+    kwargs = {
+        "torch_dtype": torch.float16 if torch.cuda.is_available() else torch.float32,
+        "low_cpu_mem_usage": True,
+    }
 
-    model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-        model_id,
-        torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
-        device_map="auto",
-        max_memory=max_memory,
-        low_cpu_mem_usage=True,
-    )
+    if torch.cuda.is_available():
+        kwargs["device_map"] = "auto"
+        kwargs["max_memory"] = {"cuda:0": "10GB", "cpu": "32GB"}
+    else:
+        kwargs["device_map"] = "cpu"
+
+    try:
+        model = Qwen2_5_VLForConditionalGeneration.from_pretrained(model_id, **kwargs)
+    except Exception as exc:
+        if torch.cuda.is_available():
+            model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+                model_id,
+                torch_dtype=torch.float16,
+                device_map="cpu",
+                low_cpu_mem_usage=True,
+            )
+        else:
+            raise
+
     return processor, model
 
 
