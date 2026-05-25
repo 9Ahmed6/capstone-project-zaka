@@ -76,6 +76,7 @@ def run(video_path: str, settings_path: str = "configs/settings.yaml") -> dict:
         initial, text_output = text_annotator.annotate(
             features,
             action_library,
+            max_new_tokens=settings["qwen"]["max_new_tokens_text"],
         )
 
         # Step 2: Refine with video frames
@@ -84,6 +85,8 @@ def run(video_path: str, settings_path: str = "configs/settings.yaml") -> dict:
             video_path_obj,
             chunk,
             max_frames=settings["video"]["max_frames_for_qwen"],
+            max_image_side=settings["video"]["max_image_side"],
+            max_new_tokens=settings["qwen"]["max_new_tokens_vision"],
         )
 
         segment = {

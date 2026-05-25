@@ -29,12 +29,18 @@ class QwenTextAnnotator:
             low_cpu_mem_usage=True,
         )
 
-    def annotate(self, feature_json: dict, action_library: list[dict]) -> tuple[dict, str]:
+    def annotate(
+        self,
+        feature_json: dict,
+        action_library: list[dict],
+        max_new_tokens: int = 800,
+    ) -> tuple[dict, str]:
         """Run text-only annotation on motion features.
         
         Args:
             feature_json: HandX-style motion features
             action_library: List of allowed action definitions
+            max_new_tokens: maximum tokens for text-only generation
             
         Returns:
             (annotation_dict, raw_model_output)
@@ -44,7 +50,7 @@ class QwenTextAnnotator:
             features=compact_json(feature_json),
         )
         messages = [{"role": "user", "content": [{"type": "text", "text": prompt}]}]
-        raw_output = self._generate(messages, max_new_tokens=1200)
+        raw_output = self._generate(messages, max_new_tokens=max_new_tokens)
         return parse_json_object(raw_output), raw_output
 
     def _generate(self, messages: list[dict], max_new_tokens: int) -> str:

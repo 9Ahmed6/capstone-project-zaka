@@ -38,7 +38,9 @@ class QwenVideoRefiner:
         initial_annotation: dict,
         video_path: str | Path,
         chunk: dict,
-        max_frames: int = 4,
+        max_frames: int = 2,
+        max_image_side: int = 320,
+        max_new_tokens: int = 1000,
     ) -> tuple[dict, str]:
         """Refine annotation using sampled video frames.
         
@@ -46,12 +48,19 @@ class QwenVideoRefiner:
             initial_annotation: Output from text-only annotator
             video_path: Path to video file
             chunk: Chunk metadata with start_frame, end_frame
-            max_frames: Maximum frames to sample (optimized for GPU)
+            max_frames: Maximum frames to sample (optimized for 10GB GPU)
+            max_image_side: Maximum side length for sampled frames
+            max_new_tokens: maximum tokens for visual refinement generation
             
         Returns:
             (refined_annotation_dict, raw_model_output)
         """
-        sampled = self._load_sampled_frames(video_path, chunk, max_frames=max_frames)
+        sampled = self._load_sampled_frames(
+            video_path,
+            chunk,
+            max_frames=max_frames,
+            max_image_side=max_image_side,
+        )
         metadata = [{"frame_index": item["frame_index"], "time_sec": item["time_sec"]} for item in sampled]
 
         prompt = VISION_REFINEMENT_PROMPT.format(
@@ -63,17 +72,17 @@ class QwenVideoRefiner:
         content.extend({"type": "image", "image": item["image"]} for item in sampled)
         messages = [{"role": "user", "content": content}]
 
-        raw_output = self._generate(messages, max_new_tokens=1400)
+        raw_output = self._generate(messages, max_new_tokens=max_new_tokens)
         return parse_json_object(raw_output), raw_output
 
     def _load_sampled_frames(
         self,
         video_path: str | Path,
         chunk: dict,
-        max_frames: int = 4,
-        max_image_side: int = 480,
+        max_frames: int = 2,
+        max_image_side: int = 320,
     ) -> list[dict]:
-        """Load sampled frames from video, optimized for 12GB GPU."""
+        """Load sampled frames from video, optimized for 10GB GPU."""
         start_frame = int(chunk.get("start_frame", 0))
         end_frame = int(chunk.get("end_frame", start_frame))
         if end_frame < start_frame:
