@@ -7,8 +7,7 @@ from pathlib import Path
 import yaml
 
 from src.exporter import build_video_output, save_video_clip_from_video, write_json
-from src.annotator import QwenTextAnnotator, load_qwen_model
-from src.refiner import QwenVideoRefiner
+from src.fusion import QwenVLAnnotator
 from src.hand_detection import (
     extract_keypoints_handed_from_video,
     fill_missing_hand_tracks,
@@ -48,18 +47,9 @@ def run(video_path: str, settings_path: str = "configs/settings.yaml") -> dict:
     )
 
     action_library = json.loads(Path(settings["paths"]["action_library"]).read_text(encoding="utf-8"))
-    processor, model = load_qwen_model(settings["qwen"]["model_id"], settings["qwen"]["temperature"])
-    text_annotator = QwenTextAnnotator(
+    annotator = QwenVLAnnotator(
         model_id=settings["qwen"]["model_id"],
         temperature=settings["qwen"]["temperature"],
-        processor=processor,
-        model=model,
-    )
-    refiner = QwenVideoRefiner(
-        model_id=settings["qwen"]["model_id"],
-        temperature=settings["qwen"]["temperature"],
-        processor=processor,
-        model=model,
     )
 
     segments = []
@@ -72,21 +62,12 @@ def run(video_path: str, settings_path: str = "configs/settings.yaml") -> dict:
             handx_diffusion_path=settings["handx"]["diffusion_path"],
         )
 
-        # Step 1: Text-only annotation
-        initial, text_output = text_annotator.annotate(
+        refined, raw_model_output = annotator.annotate_chunk(
             features,
             action_library,
-            max_new_tokens=settings["qwen"]["max_new_tokens_text"],
-        )
-
-        # Step 2: Refine with video frames
-        refined, refined_output = refiner.refine(
-            initial,
             video_path_obj,
             chunk,
             max_frames=settings["video"]["max_frames_for_qwen"],
-            max_image_side=settings["video"]["max_image_side"],
-            max_new_tokens=settings["qwen"]["max_new_tokens_vision"],
         )
 
         segment = {
@@ -98,10 +79,7 @@ def run(video_path: str, settings_path: str = "configs/settings.yaml") -> dict:
             "summary": refined.get("summary", ""),
             "evidence": refined.get("evidence", ""),
             "features": features,
-            "text_annotation": initial,
-            "text_output": text_output,
-            "refined_annotation": refined,
-            "refined_output": refined_output,
+            "raw_model_output": raw_model_output,
         }
         segments.append(segment)
 

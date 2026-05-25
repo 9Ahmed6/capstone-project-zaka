@@ -37,7 +37,7 @@ class QwenVLAnnotator:
             features=compact_json(feature_json),
         )
         messages = [{"role": "user", "content": [{"type": "text", "text": prompt}]}]
-        raw_output = self._generate(messages, max_new_tokens=600)
+        raw_output = self._generate(messages, max_new_tokens=1200)
         return parse_json_object(raw_output), raw_output
 
     def refine_with_frames(
@@ -75,7 +75,7 @@ class QwenVLAnnotator:
         initial_annotation: dict,
         video_path: str | Path,
         chunk: dict,
-        max_frames: int = 4,
+        max_frames: int = 8,
     ) -> tuple[dict, str]:
         """Reload only the sampled frames needed by Qwen-VL.
 

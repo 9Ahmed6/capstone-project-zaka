@@ -10,8 +10,7 @@ paths:
 
 video:
   frame_stride: 1
-  max_frames_for_qwen: 1
-  max_image_side: 256
+  max_frames_for_qwen: 8
 
 hand_detection:
   max_num_hands: 2
@@ -29,8 +28,8 @@ chunking:
 qwen:
   # One Qwen-VL model is used for both text-only and image-aware prompts.
   model_id: "Qwen/Qwen2.5-VL-3B-Instruct"
-  max_new_tokens_text: 400
-  max_new_tokens_vision: 800
+  max_new_tokens_text: 1200
+  max_new_tokens_vision: 1400
   temperature: 0.2
 
 handx:
