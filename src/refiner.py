@@ -16,11 +16,17 @@ from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
 class QwenVideoRefiner:
     """Refine annotations using sampled video frames from Qwen-VL."""
 
-    def __init__(self, model_id: str, temperature: float = 0.2):
+    def __init__(
+        self,
+        model_id: str,
+        temperature: float = 0.2,
+        processor=None,
+        model=None,
+    ):
         self.model_id = model_id
         self.temperature = temperature
-        self.processor = AutoProcessor.from_pretrained(model_id)
-        self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+        self.processor = processor or AutoProcessor.from_pretrained(model_id)
+        self.model = model or Qwen2_5_VLForConditionalGeneration.from_pretrained(
             model_id,
             torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
             device_map="auto",

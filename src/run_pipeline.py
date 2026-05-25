@@ -7,7 +7,7 @@ from pathlib import Path
 import yaml
 
 from src.exporter import build_video_output, save_video_clip_from_video, write_json
-from src.annotator import QwenTextAnnotator
+from src.annotator import QwenTextAnnotator, load_qwen_model
 from src.refiner import QwenVideoRefiner
 from src.hand_detection import (
     extract_keypoints_handed_from_video,
@@ -48,13 +48,18 @@ def run(video_path: str, settings_path: str = "configs/settings.yaml") -> dict:
     )
 
     action_library = json.loads(Path(settings["paths"]["action_library"]).read_text(encoding="utf-8"))
+    processor, model = load_qwen_model(settings["qwen"]["model_id"], settings["qwen"]["temperature"])
     text_annotator = QwenTextAnnotator(
         model_id=settings["qwen"]["model_id"],
         temperature=settings["qwen"]["temperature"],
+        processor=processor,
+        model=model,
     )
     refiner = QwenVideoRefiner(
         model_id=settings["qwen"]["model_id"],
         temperature=settings["qwen"]["temperature"],
+        processor=processor,
+        model=model,
     )
 
     segments = []

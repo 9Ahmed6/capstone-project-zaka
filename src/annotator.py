@@ -12,11 +12,17 @@ from src.handx_features import compact_json
 class QwenTextAnnotator:
     """Annotate chunks using only text: action library + HandX motion features."""
 
-    def __init__(self, model_id: str, temperature: float = 0.2):
+    def __init__(
+        self,
+        model_id: str,
+        temperature: float = 0.2,
+        processor=None,
+        model=None,
+    ):
         self.model_id = model_id
         self.temperature = temperature
-        self.processor = AutoProcessor.from_pretrained(model_id)
-        self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+        self.processor = processor or AutoProcessor.from_pretrained(model_id)
+        self.model = model or Qwen2_5_VLForConditionalGeneration.from_pretrained(
             model_id,
             torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
             device_map="auto",
@@ -83,6 +89,17 @@ def parse_json_object(text: str) -> dict:
         raise ValueError(f"No JSON object found in model output:\n{text[:1000]}")
 
     return json.loads(text[start : end + 1])
+
+
+def load_qwen_model(model_id: str, temperature: float = 0.2):
+    processor = AutoProcessor.from_pretrained(model_id)
+    model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+        model_id,
+        torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
+        device_map="auto",
+        low_cpu_mem_usage=True,
+    )
+    return processor, model
 
 
 TEXT_ONLY_PROMPT = """You are an expert in hand-motion analysis.
