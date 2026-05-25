@@ -28,7 +28,7 @@ chunking:
 
 qwen:
   # One Qwen-VL model is used for both text-only and image-aware prompts.
-  model_id: "Qwen/Qwen2.5-VL-1.7B-Instruct"
+  model_id: "Qwen/Qwen2.5-VL-3B-Instruct"
   max_new_tokens_text: 400
   max_new_tokens_vision: 800
   temperature: 0.2
