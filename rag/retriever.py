@@ -427,6 +427,138 @@ class ActionLibraryRetriever:
         else:
             raise ValueError(f"Unknown format: {output_format}")
 
+    @staticmethod
+    def format_matches_for_prompt(
+        matches: List[ActionMatch],
+        max_candidates: int = 3,
+    ) -> str:
+        """Format top RAG matches as text context for Qwen-VL prompts."""
+        if not matches:
+            return "No RAG candidates retrieved from the action library."
+
+        lines = []
+        for index, match in enumerate(matches[:max_candidates], start=1):
+            evidence = ", ".join(
+                f"{key}={value:.2f}" for key, value in match.evidence_scores.items()
+            )
+            lines.append(
+                f"{index}. {match.label} (id={match.action_id}, confidence={match.confidence:.3f})\n"
+                f"   scale={match.scale}, hand={match.hand}, "
+                f"contact_ratio_range={match.contact_ratio_range}\n"
+                f"   description: {match.description}\n"
+                f"   kinematic_signal: {match.kinematic_signal}\n"
+                f"   evidence: {evidence}"
+            )
+        return "\n".join(lines)
+
+
+def infer_kinematic_features(features: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Map pipeline HandX feature JSON to numeric fields used by the retriever.
+
+    Works with both HandX library output and the simple fallback extractor.
+    """
+    detected = features.get("detected_hands", [])
+    if isinstance(detected, str):
+        detected = [detected]
+    hand_sides = [hand for hand in detected if hand in ("left", "right")]
+    if not hand_sides and detected:
+        hand_sides = list(detected)
+
+    if len(hand_sides) >= 2:
+        hand_side = "both"
+    elif "left" in hand_sides:
+        hand_side = "left"
+    elif "right" in hand_sides:
+        hand_side = "right"
+    else:
+        hand_side = "unknown"
+
+    contact_ratio = float(features.get("contact_ratio", _estimate_contact_ratio(features)))
+    wrist_velocity = float(features.get("wrist_velocity", _estimate_wrist_velocity(features)))
+
+    return {
+        "contact_ratio": contact_ratio,
+        "hand_side": hand_side,
+        "hand_sides_detected": hand_sides or ["left", "right"],
+        "contact_frequency": float(features.get("contact_frequency", 0.0)),
+        "avg_contact_duration": float(features.get("avg_contact_duration", 0.0)),
+        "wrist_velocity": wrist_velocity,
+        "finger_flexion_variance": float(features.get("finger_flexion_variance", 0.0)),
+        "primary_joints": features.get("primary_joints"),
+        "description": features.get("description") or build_kinematic_description(features),
+    }
+
+
+def build_kinematic_description(features: Dict[str, Any]) -> str:
+    """Build a short text summary of motion features for TF-IDF retrieval."""
+    parts: List[str] = []
+
+    summary = features.get("hand_motion_summary", {})
+    for hand_name, stats in summary.items():
+        parts.append(
+            f"{hand_name} speed={stats.get('mean_center_speed', 0):.4f} "
+            f"openness_change={stats.get('openness_change', 0):.4f}"
+        )
+
+    relationships = features.get("two_hand_relationships", {})
+    if relationships:
+        parts.append(
+            "two_hand "
+            f"mean_distance={relationships.get('mean_distance', 0):.4f} "
+            f"distance_change={relationships.get('distance_change', 0):.4f}"
+        )
+
+    for key in ("left_hand_events", "right_hand_events", "two_hand_relationships"):
+        if key in features and features[key]:
+            snippet = json.dumps(features[key], default=str)
+            if len(snippet) > 400:
+                snippet = snippet[:400] + "..."
+            parts.append(f"{key}={snippet}")
+
+    if not parts:
+        return f"motion chunk source={features.get('source', 'unknown')}"
+
+    return "; ".join(parts)
+
+
+def _estimate_contact_ratio(features: Dict[str, Any]) -> float:
+    """Heuristic contact ratio from openness and two-hand proximity."""
+    ratio = 0.12
+
+    for stats in features.get("hand_motion_summary", {}).values():
+        openness_change = float(stats.get("openness_change", 0.0))
+        openness_start = float(stats.get("openness_start", 1.0))
+        openness_end = float(stats.get("openness_end", 1.0))
+
+        if openness_end < openness_start:
+            ratio = max(ratio, min(0.45, 0.08 + abs(openness_change) * 2.5))
+        elif abs(openness_change) < 0.02:
+            ratio = max(ratio, 0.05)
+
+        speed = float(stats.get("mean_center_speed", 0.0))
+        if speed > 0.03:
+            ratio = max(ratio, 0.10)
+
+    relationships = features.get("two_hand_relationships", {})
+    if relationships:
+        mean_distance = float(relationships.get("mean_distance", 1.0))
+        if mean_distance < 0.2:
+            ratio = max(ratio, 0.35)
+
+    if len(features.get("detected_hands", [])) >= 2:
+        ratio = max(ratio, 0.28)
+
+    return min(1.0, ratio)
+
+
+def _estimate_wrist_velocity(features: Dict[str, Any]) -> float:
+    speeds = [
+        float(stats.get("mean_center_speed", 0.0))
+        for stats in features.get("hand_motion_summary", {}).values()
+    ]
+    return max(speeds) if speeds else 0.0
+
 
 def create_handx_features_from_chunk(
     chunk: Dict[str, Any],
@@ -444,30 +576,20 @@ def create_handx_features_from_chunk(
     """
     if features is None:
         features = {}
-    
-    # Determine hand sides
-    hand_sides = features.get('hand_sides_detected', ['both'])
+
+    inferred = infer_kinematic_features(features)
+    hand_sides = inferred["hand_sides_detected"]
     if isinstance(hand_sides, str):
         hand_sides = [hand_sides]
-    
-    # Determine overall hand_side label
-    if len(hand_sides) == 2 or 'both' in hand_sides:
-        hand_side = 'both'
-    elif 'left' in hand_sides:
-        hand_side = 'left'
-    elif 'right' in hand_sides:
-        hand_side = 'right'
-    else:
-        hand_side = 'unknown'
-    
+
     return HandXFeatures(
-        contact_ratio=features.get('contact_ratio', 0.2),
-        hand_side=hand_side,
+        contact_ratio=inferred["contact_ratio"],
+        hand_side=inferred["hand_side"],
         hand_sides_detected=hand_sides,
-        contact_frequency=features.get('contact_frequency', 0.0),
-        avg_contact_duration=features.get('avg_contact_duration', 0.0),
-        wrist_velocity=features.get('wrist_velocity', 0.0),
-        finger_flexion_variance=features.get('finger_flexion_variance', 0.0),
-        primary_joints=features.get('primary_joints'),
-        description=features.get('description', f"Chunk {chunk.get('chunk_id', '?')}"),
+        contact_frequency=inferred["contact_frequency"],
+        avg_contact_duration=inferred["avg_contact_duration"],
+        wrist_velocity=inferred["wrist_velocity"],
+        finger_flexion_variance=inferred["finger_flexion_variance"],
+        primary_joints=inferred.get("primary_joints"),
+        description=inferred["description"] or f"Chunk {chunk.get('chunk_id', '?')}",
     )

@@ -20,24 +20,27 @@ from src.video_pipeline import compute_motion_signal, segment_motion_chunks
 
 
 def run(
-    video_path: str, 
+    video_path: str,
     settings_path: str = "configs/settings.yaml",
-    annotation_mode: str = "prompt"
+    annotation_mode: str = "prompt",
 ) -> dict:
     """
     Run video understanding pipeline.
-    
+
     Args:
         video_path: Path to video file
         settings_path: Path to settings YAML
-        annotation_mode: 'prompt' (Qwen-VL), 'rag' (retrieval), or 'both'
-    
+        annotation_mode: 'prompt' (RAG-augmented Qwen-VL), 'rag' (retrieval only), or 'both'
+
     Returns:
         Output dict with segments annotated in chosen mode(s)
     """
     settings = yaml.safe_load(Path(settings_path).read_text(encoding="utf-8"))
     video_path_obj = Path(video_path)
     video_id = video_path_obj.stem
+    rag_settings = settings.get("rag", {})
+    rag_top_k = int(rag_settings.get("top_k", 3))
+    use_rag_with_qwen = bool(rag_settings.get("use_with_qwen", True))
 
     keypoints, timestamps, fps, frame_numbers = extract_keypoints_handed_from_video(
         video_path_obj,
@@ -63,18 +66,20 @@ def run(
     )
 
     action_library = json.loads(Path(settings["paths"]["action_library"]).read_text(encoding="utf-8"))
-    
-    # Initialize annotators based on mode
+
     prompt_annotator = None
     rag_annotator = None
-    
+
     if annotation_mode in ("prompt", "both"):
         prompt_annotator = QwenVLAnnotator(
             model_id=settings["qwen"]["model_id"],
             temperature=settings["qwen"]["temperature"],
         )
-    
-    if annotation_mode in ("rag", "both"):
+
+    run_rag = annotation_mode in ("rag", "both") or (
+        annotation_mode == "prompt" and use_rag_with_qwen
+    )
+    if run_rag:
         rag_annotator = RAGAnnotator()
 
     segments = []
@@ -88,8 +93,31 @@ def run(
         )
 
         segment = {**chunk, "features": features}
+        rag_context = None
 
-        # Prompt-based annotation (Qwen-VL)
+        if rag_annotator:
+            rag_refined, rag_retrieval, rag_context = rag_annotator.annotate_chunk(
+                features,
+                chunk,
+                top_k=rag_top_k,
+                verbose=False,
+            )
+
+            segment.update({
+                "rag_annotation": rag_refined,
+                "rag_retrieval": rag_retrieval,
+            })
+
+            if not prompt_annotator:
+                segment.update({
+                    "action_label": rag_refined.get("action_label", "unknown"),
+                    "movement_scale": rag_refined.get("movement_scale", "unknown"),
+                    "confidence": float(rag_refined.get("confidence", 0.0)),
+                    "hand_side": rag_refined.get("hand_side", "unknown"),
+                    "summary": rag_refined.get("summary", ""),
+                    "evidence": rag_refined.get("evidence", ""),
+                })
+
         if prompt_annotator:
             refined, raw_model_output = prompt_annotator.annotate_chunk(
                 features,
@@ -97,6 +125,7 @@ def run(
                 video_path_obj,
                 chunk,
                 max_frames=settings["video"]["max_frames_for_qwen"],
+                rag_context=rag_context if use_rag_with_qwen else None,
             )
 
             segment.update({
@@ -109,46 +138,20 @@ def run(
                 "raw_model_output": raw_model_output,
             })
 
-        # RAG-based annotation (Retrieval-Augmented)
-        if rag_annotator:
-            rag_refined, rag_retrieval = rag_annotator.annotate_chunk(
-                features,
-                chunk,
-                top_k=3,
-                verbose=False,
-            )
-
-            segment.update({
-                "rag_annotation": rag_refined,
-                "rag_retrieval": rag_retrieval,
-            })
-            
-            # If no prompt annotation, use RAG as primary
-            if not prompt_annotator:
-                segment.update({
-                    "action_label": rag_refined.get("action_label", "unknown"),
-                    "movement_scale": rag_refined.get("movement_scale", "unknown"),
-                    "confidence": float(rag_refined.get("confidence", 0.0)),
-                    "hand_side": rag_refined.get("hand_side", "unknown"),
-                    "summary": rag_refined.get("summary", ""),
-                    "evidence": rag_refined.get("evidence", ""),
-                })
-
         segments.append(segment)
 
         clip_path = Path(settings["paths"]["output_clip_dir"]) / f"{video_id}_{chunk['chunk_id']}.mp4"
         save_video_clip_from_video(video_path_obj, chunk["start_frame"], chunk["end_frame"], clip_path)
 
     output = build_video_output(video_id, segments)
-    
-    # Save with appropriate suffix based on mode
+
     if annotation_mode == "prompt":
         suffix = "_segments.json"
     elif annotation_mode == "rag":
         suffix = "_segments_rag.json"
-    else:  # both
+    else:
         suffix = "_segments_both.json"
-    
+
     output_path = Path(settings["paths"]["output_json_dir"]) / f"{video_id}{suffix}"
     write_json(output_path, output)
     return output
@@ -158,9 +161,15 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run Week 5 video understanding pipeline.")
     parser.add_argument("video_path", help="Path to an MP4/AVI video file.")
     parser.add_argument("--settings", default="configs/settings.yaml", help="Path to settings YAML.")
+    parser.add_argument(
+        "--annotation-mode",
+        choices=("prompt", "rag", "both"),
+        default="prompt",
+        help="prompt: RAG-augmented Qwen-VL; rag: retrieval only; both: store both outputs",
+    )
     args = parser.parse_args()
 
-    output = run(args.video_path, args.settings)
+    output = run(args.video_path, args.settings, annotation_mode=args.annotation_mode)
     print(json.dumps({"video_id": output["video_id"], "segments": len(output["segments"])}, indent=2))
 
 

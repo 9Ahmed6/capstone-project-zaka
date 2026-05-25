@@ -35,3 +35,8 @@ qwen:
 handx:
   # Optional. If this folder does not exist, the code uses a simple fallback.
   diffusion_path: "HandX/diffusion"
+
+rag:
+  # Retrieval runs before Qwen-VL in prompt mode to ground video descriptions.
+  use_with_qwen: true
+  top_k: 3

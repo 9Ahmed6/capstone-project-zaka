@@ -76,6 +76,7 @@ class QwenVLAnnotator:
         video_path: str | Path,
         chunk: dict,
         max_frames: int = 8,
+        rag_context: dict | None = None,
     ) -> tuple[dict, str]:
         """Reload only the sampled frames needed by Qwen-VL.
 
@@ -88,6 +89,7 @@ class QwenVLAnnotator:
         prompt = VISION_PROMPT.format(
             initial_annotation=json.dumps(initial_annotation, indent=2),
             frame_metadata=json.dumps(metadata, indent=2),
+            rag_context=_format_rag_context(rag_context),
         )
 
         content = [{"type": "text", "text": prompt}]
@@ -104,6 +106,7 @@ class QwenVLAnnotator:
         video_path: str | Path,
         chunk: dict,
         max_frames: int = 8,
+        rag_context: dict | None = None,
     ) -> tuple[dict, str]:
         """Annotate a chunk with one Qwen-VL call.
 
@@ -130,6 +133,7 @@ class QwenVLAnnotator:
             action_library=json.dumps(action_library, indent=2),
             features=compact_json(feature_json),
             frame_metadata=json.dumps(metadata, indent=2),
+            rag_context=_format_rag_context(rag_context),
         )
 
         content = [{"type": "text", "text": prompt}]
@@ -244,6 +248,26 @@ def sample_frames_for_qwen_from_video(
     return sampled
 
 
+def _format_rag_context(rag_context: dict | None) -> str:
+    """Turn RAG retrieval output into prompt text for Qwen-VL."""
+    if not rag_context:
+        return "No RAG retrieval context available."
+
+    if rag_context.get("prompt_text"):
+        best = rag_context.get("best_match") or {}
+        header = ""
+        if best:
+            header = (
+                f"RAG top hypothesis: {best.get('action_label', 'unknown')} "
+                f"(confidence={best.get('confidence', 0):.2f}, "
+                f"scale={best.get('movement_scale', 'unknown')}, "
+                f"hand={best.get('hand_side', 'unknown')})\n\n"
+            )
+        return header + rag_context["prompt_text"]
+
+    return json.dumps(rag_context, indent=2)
+
+
 def parse_json_object(text: str) -> dict:
     """Extract the first JSON object from a model response."""
     text = text.strip()
@@ -298,8 +322,12 @@ Return only valid JSON with this schema:
 
 Rules:
 - Prefer visible hand pose, finger bending, wrist movement, hand distance, and object contact.
+- Use RAG candidates as biomechanical priors, but override them when frames clearly disagree.
 - Do not invent object purpose or gesture meaning.
 - If the frames are unclear, keep the label unknown and lower confidence.
+
+RAG retrieval from kinematic action library (prior hypotheses):
+{rag_context}
 
 Initial text-only annotation:
 {initial_annotation}
@@ -315,7 +343,8 @@ You will receive:
 1. A video chunk with timestamps.
 2. A controlled action library.
 3. HandX-style motion features for the chunk.
-4. Sampled frames from that same chunk.
+4. RAG retrieval candidates from a biomechanical action dictionary.
+5. Sampled frames from that same chunk.
 
 Return only valid JSON with this schema:
 {{
@@ -324,12 +353,14 @@ Return only valid JSON with this schema:
   "hand_side": "left, right, both, or unknown",
   "confidence": 0.0,
   "summary": "short visible description of the hand action",
-  "evidence": "what features and frames support the label"
+  "evidence": "what features, RAG candidates, and frames support the label"
 }}
 
 Rules:
 - Choose labels from the action library when possible.
-- Use "unknown" if no action label clearly matches.
+- Treat RAG candidates as strong priors from kinematic similarity; reconcile them with frames and features.
+- Prefer the best-matching RAG label when frames are ambiguous but kinematics align.
+- Use "unknown" if no action label clearly matches after checking RAG, features, and frames.
 - Describe physical motion only: finger bending, hand opening, wrist movement, hand travel, contact, or two-hand relation.
 - Do not guess the person's intention.
 - Use confidence below 0.6 if the frames or features are unclear.
@@ -339,6 +370,9 @@ Video chunk:
 
 Action library:
 {action_library}
+
+RAG retrieval candidates (kinematic prior):
+{rag_context}
 
 HandX-style features:
 {features}

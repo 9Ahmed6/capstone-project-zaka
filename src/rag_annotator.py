@@ -11,7 +11,12 @@ import json
 from pathlib import Path
 from typing import Dict, List, Any, Tuple, Optional
 
-from rag.retriever import ActionLibraryRetriever, HandXFeatures, create_handx_features_from_chunk
+from rag.retriever import (
+    ActionLibraryRetriever,
+    ActionMatch,
+    HandXFeatures,
+    create_handx_features_from_chunk,
+)
 
 
 class RAGAnnotator:
@@ -41,7 +46,7 @@ class RAGAnnotator:
         chunk: Dict[str, Any],
         top_k: int = 3,
         verbose: bool = False,
-    ) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
+    ) -> Tuple[Dict[str, Any], List[Dict[str, Any]], Dict[str, Any]]:
         """
         Annotate a motion chunk using RAG retrieval.
         
@@ -55,17 +60,9 @@ class RAGAnnotator:
             Tuple of:
             - refined: Best matching action label (RAG output format)
             - retrieval_results: Full list of top-k matches with scores
+            - rag_context: Structured context for Qwen-VL prompts
         """
-        # Convert features to HandXFeatures dataclass
-        handx_features = create_handx_features_from_chunk(chunk, features)
-        
-        # Retrieve top-k matching actions
-        matches = self.retriever.retrieve(
-            handx_features,
-            top_k=top_k,
-            confidence_threshold=0.0,
-            verbose=verbose,
-        )
+        matches = self.retrieve_matches(features, chunk, top_k=top_k, verbose=verbose)
         
         # Format output as JSON with "refined" action (best match)
         if matches:
@@ -104,7 +101,58 @@ class RAGAnnotator:
             for i, match in enumerate(matches)
         ]
         
-        return refined, retrieval_results
+        rag_context = self.format_prompt_context(matches, refined=refined, max_candidates=top_k)
+        return refined, retrieval_results, rag_context
+
+    def retrieve_matches(
+        self,
+        features: Dict[str, Any],
+        chunk: Dict[str, Any],
+        top_k: int = 3,
+        verbose: bool = False,
+    ) -> List[ActionMatch]:
+        """Run retrieval only and return ActionMatch objects."""
+        handx_features = create_handx_features_from_chunk(chunk, features)
+        return self.retriever.retrieve(
+            handx_features,
+            top_k=top_k,
+            confidence_threshold=0.0,
+            verbose=verbose,
+        )
+
+    def format_prompt_context(
+        self,
+        matches: List[ActionMatch],
+        refined: Optional[Dict[str, Any]] = None,
+        max_candidates: int = 3,
+    ) -> Dict[str, Any]:
+        """
+        Build structured RAG context for Qwen-VL prompts.
+
+        Returns dict with prompt_text (for injection) and serializable metadata.
+        """
+        prompt_text = ActionLibraryRetriever.format_matches_for_prompt(
+            matches,
+            max_candidates=max_candidates,
+        )
+        return {
+            "prompt_text": prompt_text,
+            "best_match": refined or {},
+            "candidates": [
+                {
+                    "rank": index + 1,
+                    "action_id": match.action_id,
+                    "label": match.label,
+                    "confidence": match.confidence,
+                    "scale": match.scale,
+                    "hand": match.hand,
+                    "description": match.description,
+                    "kinematic_signal": match.kinematic_signal,
+                    "evidence": match.evidence_scores,
+                }
+                for index, match in enumerate(matches[:max_candidates])
+            ],
+        }
     
     def _format_evidence(self, evidence_scores: Dict[str, float]) -> str:
         """Format evidence scores into human-readable string."""
@@ -138,7 +186,7 @@ class RAGAnnotator:
                 print(f"  Annotating chunk {i + 1}/{len(chunks)}")
             
             features = chunk.get('features', {})
-            refined, retrieval_results = self.annotate_chunk(
+            refined, retrieval_results, _rag_context = self.annotate_chunk(
                 features,
                 chunk,
                 verbose=False,
@@ -315,7 +363,7 @@ def annotate_with_rag(
             handx_diffusion_path=settings["handx"]["diffusion_path"],
         )
         
-        refined, retrieval_results = annotator.annotate_chunk(
+        refined, retrieval_results, _rag_context = annotator.annotate_chunk(
             features,
             chunk,
             top_k=3,
