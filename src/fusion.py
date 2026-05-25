@@ -38,7 +38,7 @@ class QwenVLAnnotator:
             features=compact_json(feature_json),
         )
         messages = [{"role": "user", "content": [{"type": "text", "text": prompt}]}]
-        raw_output = self._generate(messages, max_new_tokens=1200)
+        raw_output = self._generate(messages, max_new_tokens=256)
         return parse_json_object(raw_output), raw_output
 
     def refine_with_frames(
@@ -68,7 +68,7 @@ class QwenVLAnnotator:
         content.extend({"type": "image", "image": item["image"]} for item in sampled)
         messages = [{"role": "user", "content": content}]
 
-        raw_output = self._generate(messages, max_new_tokens=1400)
+        raw_output = self._generate(messages, max_new_tokens=256)
         return parse_json_object(raw_output), raw_output
 
     def refine_with_video_frames(
@@ -97,7 +97,7 @@ class QwenVLAnnotator:
         content.extend({"type": "image", "image": item["image"]} for item in sampled)
         messages = [{"role": "user", "content": content}]
 
-        raw_output = self._generate(messages, max_new_tokens=1400)
+        raw_output = self._generate(messages, max_new_tokens=256)
         return parse_json_object(raw_output), raw_output
 
     def annotate_chunk(
@@ -139,7 +139,7 @@ class QwenVLAnnotator:
         content.extend({"type": "image", "image": item["image"]} for item in sampled)
         messages = [{"role": "user", "content": content}]
 
-        raw_output = self._generate(messages, max_new_tokens=1000)
+        raw_output = self._generate(messages, max_new_tokens=256)
         return parse_json_object(raw_output), raw_output
 
     def _generate(self, messages: list[dict], max_new_tokens: int) -> str:
