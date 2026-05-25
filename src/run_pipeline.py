@@ -7,7 +7,8 @@ from pathlib import Path
 import yaml
 
 from src.exporter import build_video_output, save_video_clip_from_video, write_json
-from src.fusion import QwenVLAnnotator
+from src.annotator import QwenTextAnnotator
+from src.refiner import QwenVideoRefiner
 from src.hand_detection import (
     extract_keypoints_handed_from_video,
     fill_missing_hand_tracks,
@@ -47,7 +48,11 @@ def run(video_path: str, settings_path: str = "configs/settings.yaml") -> dict:
     )
 
     action_library = json.loads(Path(settings["paths"]["action_library"]).read_text(encoding="utf-8"))
-    annotator = QwenVLAnnotator(
+    text_annotator = QwenTextAnnotator(
+        model_id=settings["qwen"]["model_id"],
+        temperature=settings["qwen"]["temperature"],
+    )
+    refiner = QwenVideoRefiner(
         model_id=settings["qwen"]["model_id"],
         temperature=settings["qwen"]["temperature"],
     )
@@ -63,13 +68,13 @@ def run(video_path: str, settings_path: str = "configs/settings.yaml") -> dict:
         )
 
         # Step 1: Text-only annotation
-        initial, text_output = annotator.annotate_from_text(
+        initial, text_output = text_annotator.annotate(
             features,
             action_library,
         )
 
         # Step 2: Refine with video frames
-        refined, refined_output = annotator.refine_with_video_frames(
+        refined, refined_output = refiner.refine(
             initial,
             video_path_obj,
             chunk,
