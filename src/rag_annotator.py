@@ -30,15 +30,16 @@ class RAGAnnotator:
     - Grounded in biomechanics (HandX kinematic signals)
     """
     
-    def __init__(self, action_library_path: Optional[Path] = None):
+    def __init__(self, action_library_path: Optional[Path | str] = None):
         """
-        Initialize RAG annotator with action library.
+        Initialize RAG annotator with confirmed_actions.json.
         
         Args:
             action_library_path: Path to confirmed_actions.json.
-                                Defaults to standard project location.
+                                Defaults to rag/action_dictionary/confirmed_actions.json.
         """
-        self.retriever = ActionLibraryRetriever(action_library_path)
+        path = Path(action_library_path) if action_library_path else None
+        self.retriever = ActionLibraryRetriever(path)
     
     def annotate_chunk(
         self,

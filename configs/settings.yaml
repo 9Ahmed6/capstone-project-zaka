@@ -3,7 +3,6 @@ project:
   version: "week5"
 
 paths:
-  action_library: "schemas/action_library.json"
   output_json_dir: "outputs/json"
   output_clip_dir: "outputs/clips"
   baseline_results: "evaluation/baseline_results.json"
@@ -22,8 +21,8 @@ hand_detection:
 
 chunking:
   start_threshold: 0.02
-  end_threshold: 0.01
-  min_frames: 10
+  end_threshold: 0.005
+  min_frames: 20
 
 qwen:
   # One Qwen-VL model is used for both text-only and image-aware prompts.
@@ -37,6 +36,6 @@ handx:
   diffusion_path: "HandX/diffusion"
 
 rag:
-  # Retrieval runs before Qwen-VL in prompt mode to ground video descriptions.
-  use_with_qwen: true
+  # RAG over confirmed_actions.json is the only label vocabulary for Qwen-VL.
+  confirmed_actions_path: "rag/action_dictionary/confirmed_actions.json"
   top_k: 3

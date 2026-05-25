@@ -28,7 +28,10 @@
           "movement_scale": { "enum": ["micro", "macro", "bimanual", "unknown"] },
           "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
           "hand_side": { "enum": ["left", "right", "both", "unknown"] },
-          "summary": { "type": "string" },
+          "summary": {
+            "type": "string",
+            "description": "Visual narrative: scene/objects, hand actions, and likely intent or meaning"
+          },
           "evidence": { "type": "string" },
           "raw_model_output": { "type": "string" }
         }

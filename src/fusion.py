@@ -27,13 +27,14 @@ class QwenVLAnnotator:
             device_map="auto",
         )
 
-    def annotate_from_text(self, feature_json: dict, action_library: list[dict]) -> tuple[dict, str]:
-        """Use Qwen-VL with a text-only prompt.
-
-        This replaces the separate LLM from the original notebook.
-        """
+    def annotate_from_text(
+        self,
+        feature_json: dict,
+        rag_context: dict,
+    ) -> tuple[dict, str]:
+        """Use Qwen-VL with a text-only prompt guided by RAG retrieval."""
         prompt = TEXT_ONLY_PROMPT.format(
-            action_library=json.dumps(action_library, indent=2),
+            rag_context=_format_rag_context(rag_context),
             features=compact_json(feature_json),
         )
         messages = [{"role": "user", "content": [{"type": "text", "text": prompt}]}]
@@ -102,20 +103,19 @@ class QwenVLAnnotator:
     def annotate_chunk(
         self,
         feature_json: dict,
-        action_library: list[dict],
         video_path: str | Path,
         chunk: dict,
+        rag_context: dict,
         max_frames: int = 8,
-        rag_context: dict | None = None,
     ) -> tuple[dict, str]:
         """Annotate a chunk with one Qwen-VL call.
 
-        This sends the model everything it needs at once:
-        - HandX-style motion features
-        - the allowed action library
-        - chunk timestamps
-        - sampled frames from the original video
+        Labels are chosen only from RAG retrieval over confirmed_actions.json,
+        reconciled with HandX features and sampled video frames.
         """
+        if not rag_context:
+            raise ValueError("rag_context is required; run RAG retrieval before Qwen-VL annotation.")
+
         sampled = sample_frames_for_qwen_from_video(video_path, chunk, max_frames=max_frames)
         metadata = [{"frame_index": item["frame_index"], "time_sec": item["time_sec"]} for item in sampled]
 
@@ -130,7 +130,6 @@ class QwenVLAnnotator:
                 },
                 indent=2,
             ),
-            action_library=json.dumps(action_library, indent=2),
             features=compact_json(feature_json),
             frame_metadata=json.dumps(metadata, indent=2),
             rag_context=_format_rag_context(rag_context),
@@ -282,26 +281,27 @@ def parse_json_object(text: str) -> dict:
     return json.loads(text[start : end + 1])
 
 
-TEXT_ONLY_PROMPT = """You are an expert in hand-motion analysis.
+TEXT_ONLY_PROMPT = """You are an expert in hand-motion and activity analysis.
 
-Use the HandX-style feature JSON and action library to create a first action guess.
+Use HandX-style features and RAG retrieval from confirmed_actions.json to create a first action guess.
 Return only valid JSON with this schema:
 {{
-  "action_label": "one label from the action library or unknown",
+  "action_label": "one label from the RAG candidates or unknown",
   "movement_scale": "micro, macro, bimanual, or unknown",
   "hand_side": "left, right, both, or unknown",
   "confidence": 0.0,
-  "summary": "short physical motion description",
-  "evidence": "which feature values support the guess"
+  "summary": "2-4 sentences: inferred hand motion, plausible objects or goals if supported by features/RAG, and likely action meaning or intent; note when visuals are not available in this pass",
+  "evidence": "which features and RAG candidates support the guess"
 }}
 
 Rules:
-- Describe physical motion only.
-- Do not guess the person's intention.
+- Choose action_label only from the RAG candidate labels listed below.
+- In summary, describe kinematics plus a cautious interpretation of what the person may be trying to do.
+- Do not claim specific objects you cannot infer from features alone; use hedged language (e.g., "possibly reaching toward an object").
 - Use confidence below 0.6 when the features are weak.
 
-Action library:
-{action_library}
+RAG retrieval (confirmed_actions dictionary):
+{rag_context}
 
 HandX-style features:
 {features}
@@ -312,21 +312,23 @@ VISION_PROMPT = """You are refining a hand-motion annotation using video frames.
 
 Return only valid JSON with this schema:
 {{
-  "action_label": "one final action label or unknown",
+  "action_label": "one label from the RAG candidates or unknown",
   "movement_scale": "micro, macro, bimanual, or unknown",
   "hand_side": "left, right, both, or unknown",
   "confidence": 0.0,
-  "summary": "visible motion across the chunk",
-  "evidence": "what the sampled frames show"
+  "summary": "2-5 sentences describing what you see in the frames: visible objects and scene context, hand poses and motion, contact or manipulation, and the likely meaning or intent of the action; hedge when uncertain",
+  "evidence": "what the sampled frames and RAG candidates show"
 }}
 
 Rules:
+- Choose action_label only from the RAG candidate labels in confirmed_actions.json.
+- In summary, ground object and intent statements in visible evidence from the frames (tools, containers, surfaces, other people, etc.).
 - Prefer visible hand pose, finger bending, wrist movement, hand distance, and object contact.
 - Use RAG candidates as biomechanical priors, but override them when frames clearly disagree.
-- Do not invent object purpose or gesture meaning.
-- If the frames are unclear, keep the label unknown and lower confidence.
+- Separate physical description from intent when helpful (e.g., "fingers pinch a small object" vs "likely picking up a coin").
+- If the frames are unclear, keep the label unknown, lower confidence, and say what is ambiguous in the summary.
 
-RAG retrieval from kinematic action library (prior hypotheses):
+RAG retrieval (confirmed_actions dictionary):
 {rag_context}
 
 Initial text-only annotation:
@@ -337,41 +339,39 @@ Sampled frame metadata:
 """
 
 
-ONE_PASS_PROMPT = """You are an expert in hand-motion analysis.
+ONE_PASS_PROMPT = """You are an expert in hand-motion and visual activity analysis.
 
 You will receive:
 1. A video chunk with timestamps.
-2. A controlled action library.
-3. HandX-style motion features for the chunk.
-4. RAG retrieval candidates from a biomechanical action dictionary.
-5. Sampled frames from that same chunk.
+2. HandX-style motion features for the chunk.
+3. RAG retrieval candidates from confirmed_actions.json (the only allowed label vocabulary).
+4. Sampled frames from that same chunk.
 
 Return only valid JSON with this schema:
 {{
-  "action_label": "one label from the action library or unknown",
+  "action_label": "one label from the RAG candidates or unknown",
   "movement_scale": "micro, macro, bimanual, or unknown",
   "hand_side": "left, right, both, or unknown",
   "confidence": 0.0,
-  "summary": "short visible description of the hand action",
-  "evidence": "what features, RAG candidates, and frames support the label"
+  "summary": "Rich visual narrative (2-5 sentences): (a) what appears in the frames—objects, surfaces, tools, and scene context; (b) what each visible hand is doing—pose, motion, contact; (c) the likely meaning or intent of the action (e.g., grasping to pick up, waving to greet, pointing to indicate). Hedge or say 'unclear' when not visible.",
+  "evidence": "Bullet-style facts tying the label to frames, objects, hand motion, and RAG candidates"
 }}
 
 Rules:
-- Choose labels from the action library when possible.
+- Choose action_label only from the RAG candidate labels listed below (confirmed_actions dictionary).
 - Treat RAG candidates as strong priors from kinematic similarity; reconcile them with frames and features.
 - Prefer the best-matching RAG label when frames are ambiguous but kinematics align.
-- Use "unknown" if no action label clearly matches after checking RAG, features, and frames.
-- Describe physical motion only: finger bending, hand opening, wrist movement, hand travel, contact, or two-hand relation.
-- Do not guess the person's intention.
-- Use confidence below 0.6 if the frames or features are unclear.
+- Use "unknown" if no RAG candidate clearly matches after checking features and frames.
+- movement_scale and hand_side should align with the chosen RAG entry when possible.
+- summary must reflect what you actually see in the sampled frames, not only kinematic features.
+- Name objects when visible (cup, phone, door handle, table, etc.); if none are clear, say so.
+- Include action meaning or intent when the visuals support a reasonable interpretation; mark guesses as likely/possible.
+- Use confidence below 0.6 if the frames, objects, or intent are unclear.
 
 Video chunk:
 {chunk}
 
-Action library:
-{action_library}
-
-RAG retrieval candidates (kinematic prior):
+RAG retrieval candidates (confirmed_actions — label vocabulary):
 {rag_context}
 
 HandX-style features:

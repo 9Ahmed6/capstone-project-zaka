@@ -40,7 +40,6 @@ def run(
     video_id = video_path_obj.stem
     rag_settings = settings.get("rag", {})
     rag_top_k = int(rag_settings.get("top_k", 3))
-    use_rag_with_qwen = bool(rag_settings.get("use_with_qwen", True))
 
     keypoints, timestamps, fps, frame_numbers = extract_keypoints_handed_from_video(
         video_path_obj,
@@ -65,8 +64,6 @@ def run(
         min_frames=settings["chunking"]["min_frames"],
     )
 
-    action_library = json.loads(Path(settings["paths"]["action_library"]).read_text(encoding="utf-8"))
-
     prompt_annotator = None
     rag_annotator = None
 
@@ -76,11 +73,10 @@ def run(
             temperature=settings["qwen"]["temperature"],
         )
 
-    run_rag = annotation_mode in ("rag", "both") or (
-        annotation_mode == "prompt" and use_rag_with_qwen
-    )
-    if run_rag:
-        rag_annotator = RAGAnnotator()
+    if annotation_mode in ("rag", "both", "prompt"):
+        rag_annotator = RAGAnnotator(
+            action_library_path=rag_settings.get("confirmed_actions_path"),
+        )
 
     segments = []
     for chunk in chunks:
@@ -119,13 +115,17 @@ def run(
                 })
 
         if prompt_annotator:
+            if not rag_context:
+                raise RuntimeError(
+                    "Qwen-VL annotation requires RAG context from confirmed_actions.json. "
+                    "Ensure RAG retrieval ran successfully for this chunk."
+                )
             refined, raw_model_output = prompt_annotator.annotate_chunk(
                 features,
-                action_library,
                 video_path_obj,
                 chunk,
+                rag_context=rag_context,
                 max_frames=settings["video"]["max_frames_for_qwen"],
-                rag_context=rag_context if use_rag_with_qwen else None,
             )
 
             segment.update({
