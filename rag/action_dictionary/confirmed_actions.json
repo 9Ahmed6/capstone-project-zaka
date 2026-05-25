@@ -1,21 +1,451 @@
-[
-  {
-    "action_label": "open_hand",
-    "source": "seed",
-    "description": "Fingers extend away from the palm and the hand becomes more open.",
-    "movement_scale": "micro"
+{
+  "version": "1.0",
+  "description": "Action library for bimanual hand gesture recognition pipeline. Grounded in HandX (CVPR 2026) kinematic feature taxonomy, biomechanics literature (Frontiers in Neurorobotics 2021), and quantitative grasp taxonomy (JNR 2019). 36 classes across three movement scales.",
+  "schema_notes": {
+    "id_format": "SCALE_NNN where SCALE is MIC (micro), MAC (macro), or BIM (bimanual)",
+    "hand_values": ["left", "right", "either", "both"],
+    "contact_ratio_range": "Estimated [min, max] from HandX compute_contact_metric.py. Calibrate against actual video data using: python src/annotator.py --calibrate --json_file outputs/json/video01.json",
+    "primary_joints": "MANO 21-joint indices: 0=wrist, 1-4=thumb(CMC,MCP,IP,tip), 5-8=index(MCP,PIP,DIP,tip), 9-12=middle, 13-16=ring, 17-20=pinky",
+    "handx_kinematic_signal": "Feature extracted by HandX annotate_single.py that most reliably triggers this class",
+    "scale_thresholds": {
+      "micro": "contact_ratio <= 0.25 — isolated finger articulations, no sustained inter-hand contact",
+      "macro": "0.05 <= contact_ratio <= 0.45 — wrist/arm-dominant gestures, single hand primary",
+      "bimanual": "contact_ratio >= 0.30 AND both hands detected — coordinated two-hand operations"
+    }
   },
-  {
-    "action_label": "grasp",
-    "source": "seed",
-    "description": "The hand approaches an object area and fingers curl into a holding shape.",
-    "movement_scale": "macro"
-  },
-  {
-    "action_label": "two_hand_hold",
-    "source": "seed",
-    "description": "Both hands stay close together or near the same object while moving as a pair.",
-    "movement_scale": "bimanual"
-  }
-]
+  "action_library": [
 
+    {
+      "id": "MIC_001",
+      "label": "fingertip_pinch",
+      "scale": "micro",
+      "hand": "either",
+      "contact_ratio_range": [0.02, 0.18],
+      "primary_joints": [4, 8],
+      "description": "Thumb tip and index tip make contact; remaining fingers extended. Highest-precision grasp used for small object manipulation.",
+      "handx_kinematic_signal": "thumb-index fingertip distance < 0.02m, other fingertip distances > 0.04m",
+      "notes": "Distinguished from lateral_pinch by tip-to-tip vs pad-to-side contact geometry"
+    },
+
+    {
+      "id": "MIC_002",
+      "label": "lateral_pinch",
+      "scale": "micro",
+      "hand": "either",
+      "contact_ratio_range": [0.02, 0.20],
+      "primary_joints": [3, 7],
+      "description": "Thumb pad presses against the lateral surface of the index finger mid-phalanx; no fingertip-to-fingertip contact. Used for flat object manipulation.",
+      "handx_kinematic_signal": "thumb pad to index PIP lateral distance < 0.02m, index tip free",
+      "notes": "Key distinction from MIC_001: contact is at mid-phalanx not fingertip"
+    },
+
+    {
+      "id": "MIC_003",
+      "label": "tripod_pinch",
+      "scale": "micro",
+      "hand": "either",
+      "contact_ratio_range": [0.04, 0.22],
+      "primary_joints": [4, 8, 12],
+      "description": "Thumb, index, and middle fingertips converge to a single point. Used for pen-like, needle, or small tool manipulation.",
+      "handx_kinematic_signal": "three-fingertip cluster radius < 0.025m simultaneously",
+      "notes": "Requires all three tips to be within threshold simultaneously — stricter than MIC_001"
+    },
+
+    {
+      "id": "MIC_004",
+      "label": "index_point",
+      "scale": "micro",
+      "hand": "either",
+      "contact_ratio_range": [0.0, 0.05],
+      "primary_joints": [5, 6, 7, 8],
+      "description": "Index finger fully extended, remaining fingers curled into palm. No inter-finger contact. Pointing or directing gesture.",
+      "handx_kinematic_signal": "index flexion ratio < 0.1, middle/ring/pinky flexion ratio > 0.7",
+      "notes": "Low contact_ratio because no finger-to-finger contact; distinguished by selective extension pattern"
+    },
+
+    {
+      "id": "MIC_005",
+      "label": "finger_extension",
+      "scale": "micro",
+      "hand": "either",
+      "contact_ratio_range": [0.0, 0.12],
+      "primary_joints": [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20],
+      "description": "One or more fingers moving from a flexed to a fully extended position. Open-hand or spreading motion. Flexion ratio decreasing over the chunk window.",
+      "handx_kinematic_signal": "finger flexion ratio decreasing event on one or more fingers over time",
+      "notes": "Temporal class — requires change over time, not a static posture"
+    },
+
+    {
+      "id": "MIC_006",
+      "label": "finger_flexion",
+      "scale": "micro",
+      "hand": "either",
+      "contact_ratio_range": [0.0, 0.15],
+      "primary_joints": [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20],
+      "description": "One or more fingers curling from extended toward the palm. Closing motion without reaching full-power grasp.",
+      "handx_kinematic_signal": "finger flexion ratio increasing event on one or more fingers over time",
+      "notes": "Complement of MIC_005. If all fingers flex together to full closure, prefer MAC_006 power_grasp"
+    },
+
+    {
+      "id": "MIC_007",
+      "label": "finger_adduction",
+      "scale": "micro",
+      "hand": "either",
+      "contact_ratio_range": [0.0, 0.10],
+      "primary_joints": [5, 9, 13, 17],
+      "description": "Fingers moving toward the hand midline — inter-finger spacing decreasing, fingers converging parallel.",
+      "handx_kinematic_signal": "inter-finger abduction angle decreasing at MCP joints",
+      "notes": "Watch for finger-to-finger contact at low inter-finger distances"
+    },
+
+    {
+      "id": "MIC_008",
+      "label": "finger_abduction",
+      "scale": "micro",
+      "hand": "either",
+      "contact_ratio_range": [0.0, 0.08],
+      "primary_joints": [5, 9, 13, 17],
+      "description": "Fingers spreading away from the hand midline — fan-out motion of extended fingers.",
+      "handx_kinematic_signal": "inter-finger abduction angle increasing at MCP joints",
+      "notes": "Complement of MIC_007; zero contact_ratio expected as fingers move apart"
+    },
+
+    {
+      "id": "MIC_009",
+      "label": "thumb_opposition",
+      "scale": "micro",
+      "hand": "either",
+      "contact_ratio_range": [0.03, 0.20],
+      "primary_joints": [1, 2, 3, 4],
+      "description": "Thumb rotating across the palm to oppose a specific finger; high rotational component at the CMC joint. Foundational motion for all pinch grasps.",
+      "handx_kinematic_signal": "thumb CMC rotation event combined with palm-crossing trajectory",
+      "notes": "Distinguished from MIC_001/002/003 by the rotational path rather than final contact state"
+    },
+
+    {
+      "id": "MIC_010",
+      "label": "thumb_extension",
+      "scale": "micro",
+      "hand": "either",
+      "contact_ratio_range": [0.0, 0.08],
+      "primary_joints": [1, 2, 3, 4],
+      "description": "Thumb moving away from the palm into an extended or abducted position; no contact with other fingers.",
+      "handx_kinematic_signal": "thumb flexion ratio decreasing event, thumb-finger distances increasing",
+      "notes": "Complement of thumb_opposition; signals preparation for a grasp or a communicative gesture (thumbs-up)"
+    },
+
+    {
+      "id": "MIC_011",
+      "label": "in_hand_rotation",
+      "scale": "micro",
+      "hand": "either",
+      "contact_ratio_range": [0.05, 0.25],
+      "primary_joints": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+      "description": "Object or fingers rotating within the grasp of one hand using primarily finger and thumb movements; wrist remains relatively static.",
+      "handx_kinematic_signal": "high finger flexion variability over time, low wrist linear velocity",
+      "notes": "Key discriminator from MAC_001/002: wrist velocity must remain low for this to be micro, not macro"
+    },
+
+    {
+      "id": "MIC_012",
+      "label": "finger_tapping",
+      "scale": "micro",
+      "hand": "either",
+      "contact_ratio_range": [0.05, 0.20],
+      "primary_joints": [4, 8, 12, 16, 20],
+      "description": "Rapid repeated contact and release of a single fingertip against a surface, thumb, or other fingertip. High contact frequency, short contact duration per event.",
+      "handx_kinematic_signal": "contact_frequency > 2.0 Hz, avg_contact_duration < 0.15s",
+      "notes": "Only class where contact_frequency is the primary discriminator rather than contact_ratio"
+    },
+
+    {
+      "id": "MIC_013",
+      "label": "power_curl",
+      "scale": "micro",
+      "hand": "either",
+      "contact_ratio_range": [0.05, 0.22],
+      "primary_joints": [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20],
+      "description": "All four fingers flexing simultaneously into the palm without thumb involvement. Grip-closing motion in isolation from the thumb.",
+      "handx_kinematic_signal": "simultaneous flexion increase across all four finger chains, thumb remains static",
+      "notes": "Distinguished from MAC_006 power_grasp by absence of thumb involvement and lower wrist velocity"
+    },
+
+    {
+      "id": "MIC_014",
+      "label": "static_hold_precision",
+      "scale": "micro",
+      "hand": "either",
+      "contact_ratio_range": [0.03, 0.20],
+      "primary_joints": [4, 8, 12],
+      "description": "Hand maintaining a stable precision posture (e.g., pen hold, tool grip) with minimal finger movement for at least one second.",
+      "handx_kinematic_signal": "low flexion ratio variance over full chunk window, contact_ratio stable",
+      "notes": "Temporal class requiring stability — high variance in flexion over the window disqualifies this label"
+    },
+
+    {
+      "id": "MAC_001",
+      "label": "wrist_pronation",
+      "scale": "macro",
+      "hand": "either",
+      "contact_ratio_range": [0.0, 0.15],
+      "primary_joints": [0],
+      "description": "Forearm rotating so the palm faces downward from a neutral position. Full rotation at the wrist/forearm; finger posture may vary.",
+      "handx_kinematic_signal": "palm normal vector flipping from upward/neutral to downward — rotation event at wrist joint 0",
+      "notes": "Contact_ratio typically low because this is a wrist-dominant motion with fingers usually extended or loosely curled"
+    },
+
+    {
+      "id": "MAC_002",
+      "label": "wrist_supination",
+      "scale": "macro",
+      "hand": "either",
+      "contact_ratio_range": [0.0, 0.15],
+      "primary_joints": [0],
+      "description": "Forearm rotating so the palm faces upward from a neutral or pronated position. Reverse of pronation.",
+      "handx_kinematic_signal": "palm normal vector rotating to upward-facing — rotation event opposite direction from MAC_001",
+      "notes": "Complement of MAC_001; both can appear in sequence as wrist oscillation (see MAC_011 wave)"
+    },
+
+    {
+      "id": "MAC_003",
+      "label": "wrist_flexion",
+      "scale": "macro",
+      "hand": "either",
+      "contact_ratio_range": [0.0, 0.12],
+      "primary_joints": [0],
+      "description": "Wrist bending toward the palm side (volar flexion); hand angle decreasing from the neutral aligned position.",
+      "handx_kinematic_signal": "wrist angle event in palmar direction, change > 15 degrees",
+      "notes": "Distinct from pronation/supination: this is a hinge motion in the flexion plane, not a rotation"
+    },
+
+    {
+      "id": "MAC_004",
+      "label": "wrist_extension",
+      "scale": "macro",
+      "hand": "either",
+      "contact_ratio_range": [0.0, 0.12],
+      "primary_joints": [0],
+      "description": "Wrist bending toward the back of the hand (dorsiflexion); hand angle increasing from the neutral aligned position.",
+      "handx_kinematic_signal": "wrist angle event in dorsal direction, change > 15 degrees",
+      "notes": "Complement of MAC_003"
+    },
+
+    {
+      "id": "MAC_005",
+      "label": "reach",
+      "scale": "macro",
+      "hand": "either",
+      "contact_ratio_range": [0.0, 0.10],
+      "primary_joints": [0],
+      "description": "Hand moving through space toward a target with fingers extended; wrist linear trajectory is the dominant signal. Pre-grasp approach phase.",
+      "handx_kinematic_signal": "high wrist linear velocity > 0.3 m/s, low finger flexion ratio and variance",
+      "notes": "Often precedes MAC_006 power_grasp or MIC_001 fingertip_pinch — sequence context helps confirm"
+    },
+
+    {
+      "id": "MAC_006",
+      "label": "power_grasp",
+      "scale": "macro",
+      "hand": "either",
+      "contact_ratio_range": [0.10, 0.45],
+      "primary_joints": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20],
+      "description": "Full-hand closure around an object; all fingers and thumb wrap around a cylindrical, spherical, or large target. Maximum contact area.",
+      "handx_kinematic_signal": "simultaneous full flexion across all finger chains + thumb, palm-finger contact event",
+      "notes": "Highest contact_ratio among single-hand macro classes due to full palm and finger contact with object"
+    },
+
+    {
+      "id": "MAC_007",
+      "label": "release",
+      "scale": "macro",
+      "hand": "either",
+      "contact_ratio_range": [0.05, 0.30],
+      "primary_joints": [0, 5, 9, 13, 17],
+      "description": "Full-hand opening from a closed grasp posture; all fingers extend simultaneously to release an object.",
+      "handx_kinematic_signal": "simultaneous flexion ratio decrease from high (>0.6) to low (<0.2) across all fingers",
+      "notes": "Temporal class — requires the transition from closed to open, not just an open-hand posture"
+    },
+
+    {
+      "id": "MAC_008",
+      "label": "transport",
+      "scale": "macro",
+      "hand": "either",
+      "contact_ratio_range": [0.10, 0.40],
+      "primary_joints": [0],
+      "description": "Hand moving through space while maintaining a closed grasp posture; object being carried from one location to another.",
+      "handx_kinematic_signal": "high wrist linear velocity sustained over multiple frames, flexion ratio sustained > 0.5",
+      "notes": "Distinguished from reach (MAC_005) by sustained high flexion during movement — fingers are closed, not extended"
+    },
+
+    {
+      "id": "MAC_009",
+      "label": "push",
+      "scale": "macro",
+      "hand": "either",
+      "contact_ratio_range": [0.05, 0.25],
+      "primary_joints": [0, 5, 9, 13, 17],
+      "description": "Palm or fingers applying force in the direction away from the body; hand decelerates at the contact point and may pause.",
+      "handx_kinematic_signal": "wrist velocity toward target then deceleration event, palm-forward normal vector",
+      "notes": "Contact_ratio rises at push contact moment then drops — the deceleration pattern is the primary signal"
+    },
+
+    {
+      "id": "MAC_010",
+      "label": "pull",
+      "scale": "macro",
+      "hand": "either",
+      "contact_ratio_range": [0.08, 0.30],
+      "primary_joints": [0, 5, 6, 7, 8],
+      "description": "Fingers or hand drawing an object toward the body; retraction trajectory after contact is established.",
+      "handx_kinematic_signal": "wrist retraction velocity event after contact, flexion maintained during retraction",
+      "notes": "Complement of MAC_009; distinguished by direction of wrist velocity vector relative to body centre"
+    },
+
+    {
+      "id": "MAC_011",
+      "label": "wave",
+      "scale": "macro",
+      "hand": "either",
+      "contact_ratio_range": [0.0, 0.08],
+      "primary_joints": [0],
+      "description": "Repetitive oscillating wrist rotation with extended fingers; social communicative gesture. Two or more oscillation cycles within the chunk.",
+      "handx_kinematic_signal": "oscillating wrist rotation event repeated >= 2 times, low finger flexion ratio throughout",
+      "notes": "contact_ratio near zero because fingers are extended and no contact is made; repetition count distinguishes from single MAC_001/002"
+    },
+
+    {
+      "id": "MAC_012",
+      "label": "static_hold_power",
+      "scale": "macro",
+      "hand": "either",
+      "contact_ratio_range": [0.10, 0.40],
+      "primary_joints": [0, 5, 9, 13, 17],
+      "description": "Hand maintaining a full-power grasp posture with minimal wrist movement for at least one second.",
+      "handx_kinematic_signal": "low wrist linear velocity < 0.05 m/s, flexion ratio sustained > 0.5, stable contact_ratio",
+      "notes": "Macro counterpart of MIC_014 — distinguished by high flexion (full grasp) vs precision finger posture"
+    },
+
+    {
+      "id": "BIM_001",
+      "label": "symmetric_mirror",
+      "scale": "bimanual",
+      "hand": "both",
+      "contact_ratio_range": [0.05, 0.30],
+      "primary_joints": [0],
+      "description": "Both hands performing the same movement simultaneously and symmetrically — e.g., both arms spreading outward or both fists closing at the same time.",
+      "handx_kinematic_signal": "high inter-hand motion correlation coefficient (>0.7), symmetric wrist trajectories",
+      "notes": "No direct inter-hand contact required — correlation of trajectories is the key signal"
+    },
+
+    {
+      "id": "BIM_002",
+      "label": "asymmetric_hold_act",
+      "scale": "bimanual",
+      "hand": "both",
+      "contact_ratio_range": [0.30, 0.70],
+      "primary_joints": [0],
+      "description": "Non-dominant hand stabilises or holds an object while the dominant hand performs fine manipulation on or around it. The most common bimanual task pattern in daily activities.",
+      "handx_kinematic_signal": "non-dominant: low wrist velocity + high flexion; dominant: micro-movement signals active",
+      "notes": "Requires velocity differential between hands — if both hands move equally, prefer BIM_008"
+    },
+
+    {
+      "id": "BIM_003",
+      "label": "handover",
+      "scale": "bimanual",
+      "hand": "both",
+      "contact_ratio_range": [0.40, 0.80],
+      "primary_joints": [4, 8, 12, 16, 20],
+      "description": "Object transferred from one hand to the other; both hands briefly in simultaneous contact with the object during the transfer phase.",
+      "handx_kinematic_signal": "both hands converge spatially, simultaneous contact event from both, then diverge",
+      "notes": "The convergence-contact-diverge temporal pattern is unique to this class"
+    },
+
+    {
+      "id": "BIM_004",
+      "label": "bimanual_reach",
+      "scale": "bimanual",
+      "hand": "both",
+      "contact_ratio_range": [0.0, 0.15],
+      "primary_joints": [0],
+      "description": "Both hands extending toward targets simultaneously, either to the same target or to two different targets in parallel. Low inter-hand contact.",
+      "handx_kinematic_signal": "high wrist velocity both hands simultaneously, low flexion both hands, low contact_ratio",
+      "notes": "Distinguished from BIM_001 symmetric_mirror by high velocity — this is a movement not a posture"
+    },
+
+    {
+      "id": "BIM_005",
+      "label": "clap",
+      "scale": "bimanual",
+      "hand": "both",
+      "contact_ratio_range": [0.50, 1.0],
+      "primary_joints": [5, 9, 13, 17],
+      "description": "Both palms meeting and separating in a rapid, rhythmic pattern; inter-hand contact is full-palm and repeated.",
+      "handx_kinematic_signal": "high inter-hand contact frequency, full-palm contact event symmetric, both wrists in mirror motion",
+      "notes": "Highest contact_frequency among bimanual classes; if only one contact event occurs, prefer BIM_003 handover"
+    },
+
+    {
+      "id": "BIM_006",
+      "label": "two_hand_grasp",
+      "scale": "bimanual",
+      "hand": "both",
+      "contact_ratio_range": [0.60, 1.0],
+      "primary_joints": [0, 5, 9, 13, 17],
+      "description": "Both hands grasping the same large object simultaneously — e.g., holding a container, box, or tray with both hands wrapped around it.",
+      "handx_kinematic_signal": "both hands sustained high flexion, sustained inter-hand spatial proximity, high contact_ratio",
+      "notes": "Distinguished from BIM_007 finger_interlace by object-mediated vs direct hand-to-hand contact"
+    },
+
+    {
+      "id": "BIM_007",
+      "label": "finger_interlace",
+      "scale": "bimanual",
+      "hand": "both",
+      "contact_ratio_range": [0.70, 1.0],
+      "primary_joints": [4, 8, 12, 16, 20],
+      "description": "Fingers of both hands interleaved or clasped together; sustained multi-point direct inter-hand fingertip and mid-phalanx contact.",
+      "handx_kinematic_signal": "multiple simultaneous fingertip-to-fingertip contact events from both hands, high contact duration",
+      "notes": "Highest contact_ratio class in the entire library — near 1.0 is possible"
+    },
+
+    {
+      "id": "BIM_008",
+      "label": "bimanual_manipulation",
+      "scale": "bimanual",
+      "hand": "both",
+      "contact_ratio_range": [0.40, 0.80],
+      "primary_joints": [0, 4, 8],
+      "description": "Both hands acting on the same object with different roles and both also moving — e.g., opening a jar lid (one holds jar, one rotates lid), folding cloth, or assembling parts.",
+      "handx_kinematic_signal": "both hands variable flexion over time, sustained inter-hand proximity, velocity differential between hands exists but both move",
+      "notes": "Distinguished from BIM_002 by the fact that both hands are actively moving, not one static and one active"
+    },
+
+    {
+      "id": "BIM_009",
+      "label": "parallel_independent",
+      "scale": "bimanual",
+      "hand": "both",
+      "contact_ratio_range": [0.0, 0.10],
+      "primary_joints": [0],
+      "description": "Both hands performing completely different independent tasks simultaneously with no direct inter-hand interaction — e.g., left hand holds a phone while right hand writes.",
+      "handx_kinematic_signal": "low inter-hand spatial correlation, different flexion patterns per hand, no inter-hand contact events",
+      "notes": "Critical negative class — prevents the system from forcing an interaction label onto independent dual-hand activity"
+    },
+
+    {
+      "id": "BIM_010",
+      "label": "resting_neutral",
+      "scale": "bimanual",
+      "hand": "both",
+      "contact_ratio_range": [0.0, 0.05],
+      "primary_joints": [0],
+      "description": "Both hands in a neutral, unconstrained resting posture with no intentional movement. Baseline and idle state between actions.",
+      "handx_kinematic_signal": "very low wrist linear velocity both hands (<0.02 m/s), low flexion variance, no contact events",
+      "notes": "Anchor class for the low end of contact_ratio distribution. Essential for establishing a true baseline in evaluation"
+    }
+
+  ]
+}
