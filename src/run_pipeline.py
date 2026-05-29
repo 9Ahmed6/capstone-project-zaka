@@ -71,6 +71,8 @@ def run(
         prompt_annotator = QwenVLAnnotator(
             model_id=settings["qwen"]["model_id"],
             temperature=settings["qwen"]["temperature"],
+            max_new_tokens_text=settings["qwen"].get("max_new_tokens_text", 384),
+            max_new_tokens_vision=settings["qwen"].get("max_new_tokens_vision", 768),
         )
 
     if annotation_mode in ("rag", "both", "prompt"):

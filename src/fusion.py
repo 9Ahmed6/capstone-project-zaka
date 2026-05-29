@@ -17,9 +17,17 @@ from src.handx_features import compact_json
 class QwenVLAnnotator:
     """Use one Qwen-VL model as both the LLM and VLM."""
 
-    def __init__(self, model_id: str, temperature: float = 0.2):
+    def __init__(
+        self,
+        model_id: str,
+        temperature: float = 0.2,
+        max_new_tokens_text: int = 384,
+        max_new_tokens_vision: int = 768,
+    ):
         self.model_id = model_id
         self.temperature = temperature
+        self.max_new_tokens_text = max_new_tokens_text
+        self.max_new_tokens_vision = max_new_tokens_vision
         self.processor = AutoProcessor.from_pretrained(model_id)
         self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
             model_id,
@@ -38,7 +46,7 @@ class QwenVLAnnotator:
             features=compact_json(feature_json),
         )
         messages = [{"role": "user", "content": [{"type": "text", "text": prompt}]}]
-        raw_output = self._generate(messages, max_new_tokens=256)
+        raw_output = self._generate(messages, max_new_tokens=self.max_new_tokens_text)
         return parse_json_object(raw_output), raw_output
 
     def refine_with_frames(
@@ -68,7 +76,7 @@ class QwenVLAnnotator:
         content.extend({"type": "image", "image": item["image"]} for item in sampled)
         messages = [{"role": "user", "content": content}]
 
-        raw_output = self._generate(messages, max_new_tokens=256)
+        raw_output = self._generate(messages, max_new_tokens=self.max_new_tokens_vision)
         return parse_json_object(raw_output), raw_output
 
     def refine_with_video_frames(
@@ -97,7 +105,7 @@ class QwenVLAnnotator:
         content.extend({"type": "image", "image": item["image"]} for item in sampled)
         messages = [{"role": "user", "content": content}]
 
-        raw_output = self._generate(messages, max_new_tokens=256)
+        raw_output = self._generate(messages, max_new_tokens=self.max_new_tokens_vision)
         return parse_json_object(raw_output), raw_output
 
     def annotate_chunk(
@@ -139,7 +147,7 @@ class QwenVLAnnotator:
         content.extend({"type": "image", "image": item["image"]} for item in sampled)
         messages = [{"role": "user", "content": content}]
 
-        raw_output = self._generate(messages, max_new_tokens=256)
+        raw_output = self._generate(messages, max_new_tokens=self.max_new_tokens_vision)
         return parse_json_object(raw_output), raw_output
 
     def _generate(self, messages: list[dict], max_new_tokens: int) -> str:
@@ -268,17 +276,129 @@ def _format_rag_context(rag_context: dict | None) -> str:
 
 
 def parse_json_object(text: str) -> dict:
-    """Extract the first JSON object from a model response."""
+    """Extract the first JSON object from a model response.
+
+    Vision models occasionally hit max_new_tokens in the middle of a string,
+    especially on visually busy chunks. In that case, repair the partial object
+    by closing the active string and any open arrays/objects so the pipeline can
+    keep the usable fields instead of crashing the whole video run.
+    """
+    cleaned = _strip_code_fence(text)
+    start = cleaned.find("{")
+    if start == -1:
+        raise ValueError(f"No JSON object found in model output:\n{cleaned[:1000]}")
+
+    candidate = _first_balanced_json_object(cleaned[start:])
+    if candidate is not None:
+        return _normalize_model_json(json.loads(candidate))
+
+    repaired = _repair_truncated_json_object(cleaned[start:])
+    if repaired is not None:
+        try:
+            return _normalize_model_json(json.loads(repaired))
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                "Model output looked like JSON but was truncated or invalid and could not be repaired:\n"
+                f"{cleaned[:1000]}"
+            ) from exc
+
+    raise ValueError(f"No complete JSON object found in model output:\n{cleaned[:1000]}")
+
+
+def _strip_code_fence(text: str) -> str:
     text = text.strip()
-    text = re.sub(r"^```(?:json)?", "", text).strip()
-    text = re.sub(r"```$", "", text).strip()
+    text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE).strip()
+    text = re.sub(r"\s*```$", "", text).strip()
+    return text
 
-    start = text.find("{")
-    end = text.rfind("}")
-    if start == -1 or end == -1:
-        raise ValueError(f"No JSON object found in model output:\n{text[:1000]}")
 
-    return json.loads(text[start : end + 1])
+def _first_balanced_json_object(text: str) -> str | None:
+    stack: list[str] = []
+    in_string = False
+    escape = False
+
+    for index, char in enumerate(text):
+        if in_string:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == '"':
+                in_string = False
+            continue
+
+        if char == '"':
+            in_string = True
+        elif char in "{[":
+            stack.append(char)
+        elif char in "}]":
+            if not stack:
+                return None
+            opener = stack.pop()
+            if (opener, char) not in (("{", "}"), ("[", "]")):
+                return None
+            if not stack:
+                return text[: index + 1]
+
+    return None
+
+
+def _repair_truncated_json_object(text: str) -> str | None:
+    stack: list[str] = []
+    in_string = False
+    escape = False
+    repaired = []
+
+    for char in text:
+        repaired.append(char)
+
+        if in_string:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == '"':
+                in_string = False
+            continue
+
+        if char == '"':
+            in_string = True
+        elif char in "{[":
+            stack.append(char)
+        elif char in "}]":
+            if not stack:
+                return None
+            opener = stack.pop()
+            if (opener, char) not in (("{", "}"), ("[", "]")):
+                return None
+            if not stack:
+                break
+
+    if not stack:
+        return "".join(repaired)
+
+    if in_string:
+        if escape:
+            repaired.pop()
+        repaired.append('"')
+
+    while stack:
+        opener = stack.pop()
+        repaired.append("}" if opener == "{" else "]")
+
+    return "".join(repaired)
+
+
+def _normalize_model_json(obj: dict) -> dict:
+    """Coerce common model deviations back to the output schema."""
+    if isinstance(obj.get("evidence"), list):
+        obj["evidence"] = " | ".join(str(item) for item in obj["evidence"])
+    if "confidence" in obj:
+        try:
+            obj["confidence"] = float(obj["confidence"])
+        except (TypeError, ValueError):
+            obj["confidence"] = 0.0
+    return obj
 
 
 TEXT_ONLY_PROMPT = """You are an expert in hand-motion and activity analysis.
@@ -290,14 +410,15 @@ Return only valid JSON with this schema:
   "movement_scale": "micro, macro, bimanual, or unknown",
   "hand_side": "left, right, both, or unknown",
   "confidence": 0.0,
-  "summary": "2-4 sentences: inferred hand motion, plausible objects or goals if supported by features/RAG, and likely action meaning or intent; note when visuals are not available in this pass",
-  "evidence": "which features and RAG candidates support the guess"
+  "summary": "1-2 concise sentences: inferred hand motion, plausible object or goal if supported, and likely action meaning; note when visuals are not available",
+  "evidence": "1-3 short facts supporting the label"
 }}
 
 Rules:
 - Choose action_label only from the RAG candidate labels listed below.
 - In summary, describe kinematics plus a cautious interpretation of what the person may be trying to do.
 - Do not claim specific objects you cannot infer from features alone; use hedged language (e.g., "possibly reaching toward an object").
+- Keep summary and evidence short; evidence must be one string, not an array.
 - Use confidence below 0.6 when the features are weak.
 
 RAG retrieval (confirmed_actions dictionary):
@@ -316,8 +437,8 @@ Return only valid JSON with this schema:
   "movement_scale": "micro, macro, bimanual, or unknown",
   "hand_side": "left, right, both, or unknown",
   "confidence": 0.0,
-  "summary": "2-5 sentences describing what you see in the frames: visible objects and scene context, hand poses and motion, contact or manipulation, and the likely meaning or intent of the action; hedge when uncertain",
-  "evidence": "what the sampled frames and RAG candidates show"
+  "summary": "1-2 concise sentences describing visible objects, hand poses/motion, contact or manipulation, and likely intent; hedge when uncertain",
+  "evidence": "1-3 short facts from frames and RAG candidates"
 }}
 
 Rules:
@@ -326,6 +447,7 @@ Rules:
 - Prefer visible hand pose, finger bending, wrist movement, hand distance, and object contact.
 - Use RAG candidates as biomechanical priors, but override them when frames clearly disagree.
 - Separate physical description from intent when helpful (e.g., "fingers pinch a small object" vs "likely picking up a coin").
+- Keep summary and evidence short; evidence must be one string, not an array.
 - If the frames are unclear, keep the label unknown, lower confidence, and say what is ambiguous in the summary.
 
 RAG retrieval (confirmed_actions dictionary):
@@ -353,8 +475,8 @@ Return only valid JSON with this schema:
   "movement_scale": "micro, macro, bimanual, or unknown",
   "hand_side": "left, right, both, or unknown",
   "confidence": 0.0,
-  "summary": "Rich visual narrative (2-5 sentences): (a) what appears in the frames—objects, surfaces, tools, and scene context; (b) what each visible hand is doing—pose, motion, contact; (c) the likely meaning or intent of the action (e.g., grasping to pick up, waving to greet, pointing to indicate). Hedge or say 'unclear' when not visible.",
-  "evidence": "Bullet-style facts tying the label to frames, objects, hand motion, and RAG candidates"
+  "summary": "1-2 concise sentences covering visible objects, hand pose/motion/contact, and likely intent. Hedge or say 'unclear' when not visible.",
+  "evidence": "1-3 short facts tying the label to frames, objects, hand motion, and RAG candidates"
 }}
 
 Rules:
@@ -366,6 +488,7 @@ Rules:
 - summary must reflect what you actually see in the sampled frames, not only kinematic features.
 - Name objects when visible (cup, phone, door handle, table, etc.); if none are clear, say so.
 - Include action meaning or intent when the visuals support a reasonable interpretation; mark guesses as likely/possible.
+- Keep summary and evidence short; evidence must be one string, not an array.
 - Use confidence below 0.6 if the frames, objects, or intent are unclear.
 
 Video chunk:
