@@ -1,6 +1,6 @@
 # Action-Based Video Understanding System
 
-This project turns hand-activity videos into structured action annotations. It detects hands frame by frame, segments motion into action chunks, extracts HandX-style kinematic features, retrieves candidate labels from a curated action dictionary, and optionally uses Qwen-VL with sampled video frames to produce final JSON descriptions.
+This project turns hand-activity videos into structured action annotations. It detects hands frame by frame, segments motion into action chunks, extracts HandX-style kinematic features, retrieves candidate labels from a curated action dictionary, and uses Qwen-VL with sampled video frames to produce final JSON descriptions.
 
 Project contributors:
 
