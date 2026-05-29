@@ -8,15 +8,15 @@ Project contributors:
 - Guidance and project idea: Rabih Amhaz @ RA Development
 - Team members: Nihal Elzubair, Abdulla Mohamed, Ahmed Mohamed
 
-The current implementation is the Week 5 capstone version with:
+The current implementation is:
 
 - memory-friendly video preprocessing
 - MediaPipe hand landmark detection
 - motion-based chunking
-- HandX-style feature extraction with fallback features
+- HandX-style feature extraction
 - RAG retrieval over `confirmed_actions.json`
-- Qwen2.5-VL visual annotation
-- `prompt` and `rag` annotation modes
+- Qwen2.5-VL visual description
+- `prompt` and `rag` description modes
 - JSON and clip export
 - baseline temporal IoU and macro-F1 metrics
 
