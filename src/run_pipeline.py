@@ -30,12 +30,15 @@ def run(
     Args:
         video_path: Path to video file
         settings_path: Path to settings YAML
-        annotation_mode: 'prompt' (RAG-augmented Qwen-VL), 'rag' (retrieval only), or 'both'
+        annotation_mode: 'prompt' (RAG-augmented Qwen-VL) or 'rag' (retrieval only)
 
     Returns:
         Output dict with segments annotated in chosen mode(s)
     """
     settings = yaml.safe_load(Path(settings_path).read_text(encoding="utf-8"))
+    if annotation_mode not in ("prompt", "rag"):
+        raise ValueError("annotation_mode must be 'prompt' or 'rag'")
+
     video_path_obj = Path(video_path)
     video_id = video_path_obj.stem
     rag_settings = settings.get("rag", {})
@@ -67,7 +70,7 @@ def run(
     prompt_annotator = None
     rag_annotator = None
 
-    if annotation_mode in ("prompt", "both"):
+    if annotation_mode == "prompt":
         prompt_annotator = QwenVLAnnotator(
             model_id=settings["qwen"]["model_id"],
             temperature=settings["qwen"]["temperature"],
@@ -75,7 +78,7 @@ def run(
             max_new_tokens_vision=settings["qwen"].get("max_new_tokens_vision", 768),
         )
 
-    if annotation_mode in ("rag", "both", "prompt"):
+    if annotation_mode in ("rag", "prompt"):
         rag_annotator = RAGAnnotator(
             action_library_path=rag_settings.get("confirmed_actions_path"),
         )
@@ -147,12 +150,7 @@ def run(
 
     output = build_video_output(video_id, segments)
 
-    if annotation_mode == "prompt":
-        suffix = "_segments.json"
-    elif annotation_mode == "rag":
-        suffix = "_segments_rag.json"
-    else:
-        suffix = "_segments_both.json"
+    suffix = "_segments.json" if annotation_mode == "prompt" else "_segments_rag.json"
 
     output_path = Path(settings["paths"]["output_json_dir"]) / f"{video_id}{suffix}"
     write_json(output_path, output)
@@ -165,9 +163,9 @@ def main() -> None:
     parser.add_argument("--settings", default="configs/settings.yaml", help="Path to settings YAML.")
     parser.add_argument(
         "--annotation-mode",
-        choices=("prompt", "rag", "both"),
+        choices=("prompt", "rag"),
         default="prompt",
-        help="prompt: RAG-augmented Qwen-VL; rag: retrieval only; both: store both outputs",
+        help="prompt: RAG-augmented Qwen-VL; rag: retrieval only",
     )
     args = parser.parse_args()
 

@@ -1,40 +1,28 @@
 # Action-Based Video Understanding System
 
-This project is developed by:
+This project turns hand-activity videos into structured action annotations. It detects hands frame by frame, segments motion into action chunks, extracts HandX-style kinematic features, retrieves candidate labels from a curated action dictionary, and optionally uses Qwen-VL with sampled video frames to produce final JSON descriptions.
 
-Mentor: Patrick Saade
-Guidance and project idea: Rabih Amhaz @ RA Development
+Project contributors:
 
-Team Members:
+- Mentor: Patrick Saade
+- Guidance and project idea: Rabih Amhaz @ RA Development
+- Team members: Nihal Elzubair, Abdulla Mohamed, Ahmed Mohamed
 
-    Nihal Elzubair
-    Abdulla Mohamed
-    Ahmed Mohamed
- 
-This project takes a video, finds the hand movements inside it, splits the video into action chunks, and creates a JSON description for each chunk.
+The current implementation is the Week 5 capstone version with:
 
-It is built up to the **Week 5 milestone** from the capstone proposal and includes:
-
-- video loading
-- hand detection
-- motion-based action chunking
-- HandX-style movement features
-- Qwen-VL annotation
+- memory-friendly video preprocessing
+- MediaPipe hand landmark detection
+- motion-based chunking
+- HandX-style feature extraction with fallback features
+- RAG retrieval over `confirmed_actions.json`
+- Qwen2.5-VL visual annotation
+- `prompt` and `rag` annotation modes
 - JSON and clip export
-- baseline evaluation metrics
+- baseline temporal IoU and macro-F1 metrics
 
+## What The System Produces
 
-## What This Project Does
-
-Imagine you have a video where someone is moving their hands. This system tries to answer:
-
-- When does an action start?
-- When does it end?
-- Which hand moved?
-- Was it a small finger movement, a larger hand movement, or a two-hand action?
-- What is a short description of what happened?
-
-The final output is a JSON file like this:
+For each input video, the pipeline writes one JSON file containing detected action segments:
 
 ```json
 {
@@ -44,321 +32,234 @@ The final output is a JSON file like this:
       "chunk_id": "chunk_000",
       "start_time": 1.2,
       "end_time": 3.4,
-      "action_label": "open_hand",
-      "movement_scale": "micro",
-      "confidence": 0.72,
-      "hand_side": "right",
-      "summary": "The right hand opens during the chunk.",
-      "evidence": "The sampled frames show the fingers extending away from the palm."
+      "start_frame": 36,
+      "end_frame": 102,
+      "action_label": "static_hold_power",
+      "movement_scale": "macro",
+      "confidence": 0.84,
+      "hand_side": "both",
+      "summary": "Both hands hold a remote-like device while small adjustments are made.",
+      "evidence": "RAG matched power grasp features; sampled frames show sustained hand-object contact."
     }
   ]
 }
 ```
 
+The output schema is defined in `schemas/output_schema.json`.
+
 ## Pipeline Overview
 
-The pipeline runs in this order:
+```text
+Video file
+ -> Read frames one at a time
+ -> Detect 21 hand landmarks per hand with MediaPipe Tasks
+ -> Store keypoints, timestamps, and original frame numbers
+ -> Convert MediaPipe joints to HandX joint order
+ -> Interpolate missing hand detections
+ -> Compute motion signal from landmark displacement
+ -> Segment motion into chunks
+ -> Extract HandX-style features for each chunk
+ -> Retrieve top action candidates from confirmed_actions.json
+ -> Optional: sample frames and ask Qwen-VL to refine the label
+ -> Save final JSON, raw model output, keypoints, and MP4 clips
+```
+
+The main entry point is `src/run_pipeline.py`.
+
+## Annotation Modes
+
+The pipeline supports two modes:
+
+```bash
+python -m src.run_pipeline data/videos/sample.mp4 --annotation-mode prompt
+python -m src.run_pipeline data/videos/sample.mp4 --annotation-mode rag
+```
+
+`prompt` is the default mode. It runs RAG retrieval first, then sends the top candidates, HandX-style features, timestamps, and sampled frames to Qwen-VL. This gives the richest annotations.
+
+`rag` uses only deterministic retrieval from the action dictionary. It is faster and does not load Qwen-VL.
+
+Output file suffixes:
+
+- `prompt`: `outputs/json/<video_id>_segments.json`
+- `rag`: `outputs/json/<video_id>_segments_rag.json`
+
+## Action Dictionary And RAG
+
+The current controlled vocabulary is:
 
 ```text
-Video
- -> Read one frame at a time
- -> Detect hand landmarks with MediaPipe
- -> Store only keypoints, timestamps, and original frame numbers
- -> Convert landmarks to HandX joint order
- -> Measure hand motion
- -> Split video into action chunks
- -> Extract HandX-style motion features
- -> Load the action library
- -> Reload only 4-8 sampled frames from each chunk
- -> Use Qwen-VL once with features, action library, and frames
- -> Save JSON results and video clips
- -> Optionally calculate baseline metrics
+rag/action_dictionary/confirmed_actions.json
 ```
 
-## Step-By-Step Explanation
+It contains 36 action classes across three movement scales:
 
-### 1. Preprocess the Video Frame By Frame
+- `micro`: isolated finger movements and precision gestures
+- `macro`: wrist, hand, and arm-dominant single-hand actions
+- `bimanual`: coordinated two-hand actions
 
-The project reads the video using OpenCV, but the main runner does not store the whole video in RAM.
+Each action includes:
 
-Main file:
+- action id, such as `MIC_001`, `MAC_006`, or `BIM_008`
+- label, such as `fingertip_pinch`, `power_grasp`, or `bimanual_manipulation`
+- movement scale
+- expected hand side
+- contact ratio range
+- primary MANO/HandX joints
+- kinematic signal description
+- notes for disambiguation
+
+`rag/retriever.py` turns extracted features into a `HandXFeatures` object and scores each action using:
+
+- contact ratio match
+- hand compatibility
+- movement-scale alignment
+- TF-IDF similarity between kinematic descriptions
+
+The top matches are passed to Qwen-VL as the only allowed label candidates, which keeps labels consistent and prevents the model from inventing new class names.
+
+## Hand Detection
+
+Hand detection lives in `src/hand_detection.py`.
+
+The project uses the MediaPipe Tasks `HandLandmarker` model. If the model file is missing and `auto_download_model` is enabled, it downloads:
 
 ```text
-src/hand_detection.py
+models/hand_landmarker.task
 ```
 
-The function `extract_keypoints_handed_from_video()` reads one frame, detects hands, stores the keypoints, then moves to the next frame.
-
-It stores:
-
-- hand keypoints
-- timestamps
-- original video frame numbers
-- video FPS
-
-It does not store all raw frames.
-
-### 2. Detect Hands
-
-The project uses the newer **MediaPipe Tasks HandLandmarker** model.
-
-Main file:
+For each processed frame, the detector stores:
 
 ```text
-src/hand_detection.py
+(frames, 2, 21, 3)
 ```
 
-For every frame, MediaPipe returns 21 hand landmark points. Each point has:
+The hand slots are:
 
 ```text
-x, y, z
+0 = left
+1 = right
 ```
 
-The system stores the results as:
+The pipeline does not keep all raw frames in memory. It stores only landmarks, timestamps, and frame numbers, then reloads selected frames later when Qwen-VL needs visual context.
+
+## Motion Chunking
+
+Motion chunking lives in `src/video_pipeline.py`.
+
+The system computes landmark displacement between consecutive frames:
 
 ```text
-frames x hands x joints x coordinates
+motion becomes high -> chunk starts
+motion becomes low  -> chunk ends
 ```
 
-So the shape is:
+The thresholds are configured in `configs/settings.yaml`:
+
+```yaml
+chunking:
+  start_threshold: 0.02
+  end_threshold: 0.005
+  min_frames: 20
+```
+
+Each chunk stores processed-frame indices, original video frame numbers, start/end times, and a stable `chunk_id`.
+
+## HandX-Style Features
+
+Feature extraction lives in `src/handx_features.py`.
+
+If `HandX/diffusion` is available, the project tries to call HandX motion-code utilities. If that fails or the HandX path is missing, it falls back to lightweight features:
+
+- detected hands
+- per-hand center speed
+- hand openness start/end/change
+- two-hand distance and distance change
+- feature source, either `handx` or `simple_fallback`
+
+This keeps the project runnable even when the full HandX environment is not available.
+
+## Qwen-VL Fusion
+
+Qwen-VL annotation lives in `src/fusion.py`.
+
+The default model is:
 
 ```text
-(number_of_frames, 2, 21, 3)
+Qwen/Qwen2.5-VL-3B-Instruct
 ```
 
-The two hand slots are:
+For each chunk, Qwen receives:
 
-```text
-0 = left hand
-1 = right hand
+- chunk timestamps and frame numbers
+- compact HandX-style feature JSON
+- top RAG candidates from `confirmed_actions.json`
+- sampled frames from the same video chunk
+
+The prompt requires JSON with:
+
+- `action_label`
+- `movement_scale`
+- `hand_side`
+- `confidence`
+- `summary`
+- `evidence`
+
+The parser is defensive for long videos and busy frames. It accepts fenced JSON, extracts the first balanced JSON object, normalizes common model deviations, and can repair outputs truncated near the end of a string or array.
+
+## Configuration
+
+Main settings are in `configs/settings.yaml`.
+
+Important options:
+
+```yaml
+video:
+  frame_stride: 1
+  max_frames_for_qwen: 4
+
+qwen:
+  model_id: "Qwen/Qwen2.5-VL-3B-Instruct"
+  max_new_tokens_text: 384
+  max_new_tokens_vision: 768
+  temperature: 0.2
+
+rag:
+  confirmed_actions_path: "rag/action_dictionary/confirmed_actions.json"
+  top_k: 3
 ```
 
-### 3. Convert to HandX Format
+For faster runs, increase `frame_stride`, lower `max_frames_for_qwen`, or use `--annotation-mode rag`.
 
-MediaPipe and HandX use a different order for the 21 hand joints.
-
-The function `mediapipe_to_handx_order()` reorders the landmarks so they match the HandX-style format.
-
-### 4. Fill Missing Hand Detections
-
-Sometimes MediaPipe misses the hand for a few frames.
-
-The function `fill_missing_hand_tracks()` fills short gaps using interpolation. This makes the motion signal smoother.
-
-### 5. Measure Motion
-
-The project compares each frame with the previous frame.
-
-If the landmarks move a lot, the motion score is high.
-
-If the landmarks barely move, the motion score is low.
-
-Main function:
-
-```text
-compute_motion_signal()
-```
-
-### 6. Split the Video Into Chunks
-
-The project uses a simple threshold method:
-
-```text
-motion becomes high -> action starts
-motion becomes low  -> action ends
-```
-
-Main function:
-
-```text
-segment_motion_chunks()
-```
-
-Each chunk gets:
-
-- chunk id
-- start frame
-- end frame
-- start time
-- end time
-
-### 7. Extract HandX-Style Features
-
-HandX project: https://handx-project.github.io/ is a research project from the University of Illinois Urbana-Champaign and collaborators at Snap Inc. focused on AI-generated bimanual hand motion, essentially teaching models to synthesize realistic two-hand movements with detailed finger articulation, contact timing, and interaction dynamics.
-
-In this project we used HandX annotation strategy to extracts representative hand motion features from the videos, e.g., contact events and finger flexion, this will be helpful for the LLM later to generate accurate descriptions. 
-
-Main file:
-
-```text
-src/handx_features.py
-```
-
-If the real HandX repo is available, the project uses it.
-
-If HandX is not available, the project still runs with a simple fallback feature extractor. The fallback measures things like:
-
-- hand speed
-- hand openness
-- whether one hand or both hands are active
-- distance between hands
-
-This makes the project easier to test.
-Currently, the necessary HandX files are added to the repo. 
-
-### 8. Use Qwen-VL Once Per Chunk
-
-Main file:
-
-```text
-src/fusion.py
-```
-
-This project uses **one Qwen-VL model** for both language and vision.
-
-For each action chunk, it sends Qwen-VL:
-
-- HandX-style features
-- action library
-- chunk timestamps
-- sampled video frames
-
-This is a one-pass call. Qwen-VL sees the motion features, the allowed labels, and the visual frames at the same time.
-
-It creates the final chunk annotation, such as:
-
-```json
-{
-  "action_label": "open_hand",
-  "movement_scale": "micro",
-  "hand_side": "right",
-  "confidence": 0.65
-}
-```
-
-## Where the Action Library Fits
-
-The action library is used during the Qwen-VL annotation stage.
-
-Main file:
-
-```text
-schemas/action_library.json
-```
-
-The video pipeline detects hands and splits the video into chunks first. Then the action library is loaded after the system has already created a motion chunk and extracted HandX-style features from that chunk.
-
-At that point, Qwen-VL receives:
-
-- the motion features for one chunk
-- the list of allowed action labels
-- visual cues for each action label
-- sampled frames from that chunk
-
-The action library acts like the system's controlled vocabulary. It tells Qwen-VL which labels it should choose from.
-
-Example action library item:
-
-```json
-{
-  "action_label": "open_hand",
-  "movement_scale": "micro",
-  "hand_side": "left_or_right",
-  "aliases": ["open palm", "fingers spread", "hand opens"],
-  "visual_cues": [
-    "fingers are extended",
-    "palm area is visible",
-    "gaps appear between fingers"
-  ]
-}
-```
-
-Without the action library, the model might invent inconsistent labels.
-
-With the action library, the model is guided toward consistent labels such as:
-
-```text
-open_hand
-close_hand
-pinch
-wrist_rotation
-reach
-grasp
-two_hand_hold
-hand_transfer
-```
-
-In simple terms:
-
-```text
-HandX-style features explain what moved.
-The action library explains what labels are allowed.
-Qwen-VL chooses the best label and writes the description.
-```
-
-This keeps RAM much lower because Qwen sees only a few selected frames per chunk, not the full video.
-
-### 9. Save Results
-
-Main file:
-
-```text
-src/exporter.py
-```
-
-The project saves:
-
-- one final JSON file per video
-- one small MP4 clip per detected chunk
-
-Outputs are written to:
-
-```text
-outputs/json/
-outputs/clips/
-```
-
-### 10. Evaluate the Week 5 Baseline
-
-Main file:
-
-```text
-evaluation/metrics.py
-```
-
-If you provide ground-truth annotations, the project can calculate:
-
-- temporal IoU
-- macro-F1
-
-These are the baseline metrics required for Week 5.
+For richer Qwen summaries, increase `max_new_tokens_vision`, but expect slower inference and more GPU memory use.
 
 ## Folder Layout
 
 ```text
-configs/settings.yaml              Main settings
-schemas/action_library.json         Action labels and visual cues
-schemas/output_schema.json          Expected JSON output format
-data/videos/                        Input videos
-data/annotations/                   Ground-truth labels for evaluation
-outputs/json/                       Output JSON files
-outputs/clips/                      Exported action clips
-src/video_pipeline.py               Frame extraction and chunking
-src/hand_detection.py               MediaPipe hand detection
-src/handx_features.py               HandX-style feature extraction
-src/fusion.py                       Qwen-VL annotation and refinement
-src/exporter.py                     JSON and clip saving
-src/run_pipeline.py                 Main command-line runner
-evaluation/metrics.py               Baseline metrics
-notebooks/experiments.ipynb         Week 5 experiment notebook
-rag/action_dictionary/              Starter action dictionary for later RAG work
+configs/settings.yaml                  Main runtime configuration
+data/videos/                           Input videos
+evaluation/metrics.py                  Baseline temporal IoU and macro-F1
+HandX/diffusion/                       Optional bundled HandX-related code
+models/hand_landmarker.task            MediaPipe hand landmark model
+notebooks/experiments.ipynb            Experiment notebook
+outputs/json/                          Generated JSON and keypoint outputs
+outputs/clips/                         Per-chunk MP4 clips
+rag/action_dictionary/confirmed_actions.json
+                                        Curated 36-class action dictionary
+rag/retriever.py                       RAG action retrieval logic
+schemas/output_schema.json             Expected output JSON schema
+src/exporter.py                        JSON and MP4 writing
+src/fusion.py                          Qwen-VL prompts, generation, JSON parsing
+src/hand_detection.py                  MediaPipe hand detection and interpolation
+src/handx_features.py                  HandX/fallback feature extraction
+src/rag_annotator.py                   RAG-only annotation wrapper
+src/run_pipeline.py                    Main CLI runner
+src/video_pipeline.py                  Video metadata, motion signal, chunking
 ```
 
-## Run Locally
+## Local Setup
 
-Qwen-VL is large, so a GPU is strongly recommended. If your laptop has no GPU, use Google Colab instead.
-
-Local setup:
+Qwen-VL inference is much smoother with a CUDA GPU. RAG-only mode can run on weaker machines because it does not load the vision-language model.
 
 ```bash
 python -m venv .venv
@@ -366,38 +267,47 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-Put a video in:
+Put videos in:
 
 ```text
 data/videos/
 ```
 
-Run:
+Run the default RAG + Qwen-VL pipeline:
 
 ```bash
 python -m src.run_pipeline data/videos/your_video.mp4
 ```
 
-## How To Run On Google Colab
+Run retrieval-only mode:
 
-Use Colab if your machine does not have a GPU.
+```bash
+python -m src.run_pipeline data/videos/your_video.mp4 --annotation-mode rag
+```
 
-### 1. Open Colab
+Use a custom config:
 
-Go to:
+```bash
+python -m src.run_pipeline data/videos/your_video.mp4 --settings configs/settings.yaml
+```
 
-[https://colab.research.google.com](https://colab.research.google.com)
+## Google Colab
 
-### 2. Turn On GPU
+Use Colab if your local machine does not have a GPU.
 
-In Colab:
+1. Open Colab:
+
+```text
+https://colab.research.google.com
+```
+
+2. Enable GPU:
 
 ```text
 Runtime -> Change runtime type -> GPU -> Save
 ```
 
-### 3. Clone GitHub Repo
-
+3. Clone the repository:
 
 ```python
 %cd /content
@@ -405,28 +315,20 @@ Runtime -> Change runtime type -> GPU -> Save
 %cd capstone-project-zaka
 ```
 
-
-### 4. Install Requirements
+4. Install requirements:
 
 ```python
 !pip install -r requirements.txt
 ```
 
-### 5. Add a Video
-
-Option A: upload a video directly to Colab:
+5. Upload a video:
 
 ```python
 from google.colab import files
-uploaded = files.upload()
-```
-
-Move it into the project video folder:
-
-```python
-import shutil
 from pathlib import Path
+import shutil
 
+uploaded = files.upload()
 Path("data/videos").mkdir(parents=True, exist_ok=True)
 
 for name in uploaded:
@@ -436,56 +338,84 @@ for name in uploaded:
 print(video_name)
 ```
 
-Option B: use Google Drive:
-
-```python
-from google.colab import drive
-drive.mount("/content/drive")
-```
-
-Copy a video from Drive:
-
-```python
-!cp "/content/drive/MyDrive/your_video.mp4" data/videos/
-```
-
-### 6. Run the Pipeline
-
-Replace the file name with your video name:
+6. Run the pipeline:
 
 ```python
 !python -m src.run_pipeline data/videos/your_video.mp4
 ```
 
-### 7. View Outputs
+For a faster retrieval-only run:
 
-List the output files:
+```python
+!python -m src.run_pipeline data/videos/your_video.mp4 --annotation-mode rag
+```
+
+7. Inspect outputs:
 
 ```python
 !ls outputs/json
 !ls outputs/clips
 ```
 
-Open the JSON result:
-
 ```python
 import json
 from pathlib import Path
 
-result_path = list(Path("outputs/json").glob("*_segments.json"))[0]
+result_path = list(Path("outputs/json").glob("*_segments*.json"))[0]
 result = json.loads(result_path.read_text())
 result
 ```
 
+## Evaluation
+
+Baseline evaluation utilities are in `evaluation/metrics.py`.
+
+They provide:
+
+- temporal IoU for segment overlap
+- prediction-to-ground-truth matching
+- macro-F1 after temporal matching
+
+Programmatic example:
+
+```python
+from evaluation.metrics import evaluate_predictions
+
+metrics = evaluate_predictions(predictions, ground_truth, iou_threshold=0.5)
+print(metrics)
+```
+
+Ground-truth segments should use the same timing and `action_label` fields as the pipeline output.
+
+## Troubleshooting
+
+No hands detected:
+
+- Check that the video visibly contains hands.
+- Lower MediaPipe confidence thresholds in `configs/settings.yaml`.
+- Try `frame_stride: 1` if you were skipping frames.
+
+Qwen-VL is slow or runs out of memory:
+
+- Use `--annotation-mode rag`.
+- Reduce `video.max_frames_for_qwen`.
+- Use a shorter video or smaller chunks.
+- Run on a Colab GPU or another CUDA machine.
+
+JSON parsing errors on long videos:
+
+- The current parser repairs common truncated Qwen outputs.
+- If failures continue, increase `qwen.max_new_tokens_vision`.
+- Keep prompt outputs concise; the current prompts ask for short `summary` and `evidence` strings.
+
+MediaPipe model missing:
+
+- Keep `hand_detection.auto_download_model: true`, or place `hand_landmarker.task` in `models/`.
 
 ## Notes
 
-- Keep videos in Google Drive or upload them directly to Colab.
-- The project uses `Qwen/Qwen2.5-VL-3B-Instruct` by default.
-- For weaker GPUs, test with a short video first.
-- You can reduce the number of sampled frames in `configs/settings.yaml`:
-
-```yaml
-video:
-  max_frames_for_qwen: 4
-```
+- `confirmed_actions.json` is the source of truth for action labels.
+- Qwen-VL should choose labels only from the RAG candidates.
+- Raw model output is stored in prompt-based results for debugging.
+- Per-chunk MP4 clips are exported so annotations can be checked visually.
+- The pipeline is designed to avoid loading the full video into RAM.
