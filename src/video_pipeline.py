@@ -106,6 +106,41 @@ def segment_motion_chunks(
     return chunks
 
 
+def segment_dense_chunks(
+    timestamps: list[float],
+    frame_numbers: list[int] | None = None,
+    window_sec: float = 4.0,
+    overlap_sec: float = 1.0,
+) -> list[dict]:
+    """Split the full video into overlapping windows for denser analysis."""
+    if window_sec <= 0:
+        raise ValueError("window_sec must be greater than zero")
+    if overlap_sec < 0 or overlap_sec >= window_sec:
+        raise ValueError("overlap_sec must be at least zero and smaller than window_sec")
+    if not timestamps:
+        return []
+
+    timestamp_array = np.asarray(timestamps, dtype=np.float32)
+    step_sec = window_sec - overlap_sec
+    chunks: list[dict] = []
+    start_time = float(timestamp_array[0])
+    final_time = float(timestamp_array[-1])
+
+    while start_time <= final_time:
+        start_index = int(np.searchsorted(timestamp_array, start_time, side="left"))
+        end_index = int(np.searchsorted(timestamp_array, start_time + window_sec, side="right") - 1)
+        end_index = min(max(end_index, start_index), len(timestamps) - 1)
+        if final_time - float(timestamp_array[end_index]) <= step_sec:
+            end_index = len(timestamps) - 1
+        chunks.append(_make_chunk(len(chunks), start_index, end_index, timestamps, frame_numbers))
+
+        if end_index >= len(timestamps) - 1:
+            break
+        start_time += step_sec
+
+    return chunks
+
+
 def _make_chunk(
     chunk_number: int,
     start_index: int,

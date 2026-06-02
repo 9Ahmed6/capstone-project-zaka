@@ -23,6 +23,8 @@ chunking:
   start_threshold: 0.02
   end_threshold: 0.005
   min_frames: 20
+  dense_window_sec: 4.0
+  dense_overlap_sec: 1.0
 
 qwen:
   # One Qwen-VL model is used for both text-only and image-aware prompts.
@@ -38,4 +40,4 @@ handx:
 rag:
   # RAG over confirmed_actions.json is the only label vocabulary for Qwen-VL.
   confirmed_actions_path: "rag/action_dictionary/confirmed_actions.json"
-  top_k: 3
+  top_k: 6

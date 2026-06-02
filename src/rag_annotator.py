@@ -45,7 +45,7 @@ class RAGAnnotator:
         self,
         features: Dict[str, Any],
         chunk: Dict[str, Any],
-        top_k: int = 3,
+        top_k: int = 6,
         verbose: bool = False,
     ) -> Tuple[Dict[str, Any], List[Dict[str, Any]], Dict[str, Any]]:
         """
@@ -109,7 +109,7 @@ class RAGAnnotator:
         self,
         features: Dict[str, Any],
         chunk: Dict[str, Any],
-        top_k: int = 3,
+        top_k: int = 6,
         verbose: bool = False,
     ) -> List[ActionMatch]:
         """Run retrieval only and return ActionMatch objects."""
@@ -367,7 +367,7 @@ def annotate_with_rag(
         refined, retrieval_results, _rag_context = annotator.annotate_chunk(
             features,
             chunk,
-            top_k=3,
+            top_k=int(settings.get("rag", {}).get("top_k", 6)),
             verbose=False,
         )
         

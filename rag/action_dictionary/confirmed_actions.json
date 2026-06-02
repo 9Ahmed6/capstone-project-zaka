@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "description": "Action library for bimanual hand gesture recognition pipeline. Grounded in HandX (CVPR 2026) kinematic feature taxonomy, biomechanics literature (Frontiers in Neurorobotics 2021), and quantitative grasp taxonomy (JNR 2019). 36 classes across three movement scales.",
+  "description": "Action library for bimanual hand gesture recognition pipeline. Grounded in HandX (CVPR 2026) kinematic feature taxonomy, biomechanics literature (Frontiers in Neurorobotics 2021), and quantitative grasp taxonomy (JNR 2019). 38 classes across three movement scales.",
   "schema_notes": {
     "id_format": "SCALE_NNN where SCALE is MIC (micro), MAC (macro), or BIM (bimanual)",
     "hand_values": ["left", "right", "either", "both"],
@@ -181,6 +181,30 @@
       "description": "Hand maintaining a stable precision posture (e.g., pen hold, tool grip) with minimal finger movement for at least one second.",
       "handx_kinematic_signal": "low flexion ratio variance over full chunk window, contact_ratio stable",
       "notes": "Temporal class requiring stability — high variance in flexion over the window disqualifies this label"
+    },
+
+    {
+      "id": "MIC_015",
+      "label": "button_press",
+      "scale": "micro",
+      "hand": "either",
+      "contact_ratio_range": [0.0, 0.20],
+      "primary_joints": [5, 6, 7, 8],
+      "description": "A finger, usually the index finger, presses and may release a button, key, or small control while the rest of the hand remains comparatively stable.",
+      "handx_kinematic_signal": "isolated index finger flexion transition followed by extension or short hold, low wrist motion, button press release event",
+      "notes": "Use when visual frames show a button or key interaction. Distinguished from static_hold_power by active finger articulation."
+    },
+
+    {
+      "id": "MIC_016",
+      "label": "dial_rotation",
+      "scale": "micro",
+      "hand": "either",
+      "contact_ratio_range": [0.03, 0.25],
+      "primary_joints": [1, 2, 3, 4, 5, 6, 7, 8],
+      "description": "Thumb and fingers rotate a knob, dial, or small rotary control while the wrist stays relatively stable.",
+      "handx_kinematic_signal": "variable thumb and finger flexion transitions with low wrist linear velocity, small rotary control or dial rotation",
+      "notes": "Control-device specialization of in_hand_rotation. Prefer this label when a visible knob or dial is manipulated."
     },
 
     {

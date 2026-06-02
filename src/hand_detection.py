@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Callable
 from urllib.request import urlretrieve
 
 import cv2
@@ -115,6 +116,7 @@ def extract_keypoints_handed_from_video(
     min_tracking_confidence: float = 0.5,
     model_path: str | Path = "models/hand_landmarker.task",
     auto_download_model: bool = True,
+    progress_callback: Callable[[int, int | None], None] | None = None,
 ) -> tuple[np.ndarray, list[float], float, list[int]]:
     """Preprocess a video frame-by-frame and store only hand keypoints.
 
@@ -132,7 +134,8 @@ def extract_keypoints_handed_from_video(
 
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    progress_total = total_frames // max(frame_stride, 1) if total_frames else None
+    stride = max(frame_stride, 1)
+    progress_total = (total_frames + stride - 1) // stride if total_frames else None
 
     detector = _create_hand_landmarker(
         model_path=model_path,
@@ -154,11 +157,13 @@ def extract_keypoints_handed_from_video(
                 if not ok:
                     break
 
-                if frame_index % frame_stride == 0:
+                if frame_index % stride == 0:
                     keypoint_frames.append(_detect_frame_keypoints(detector, frame))
                     timestamps.append(frame_index / fps)
                     frame_numbers.append(frame_index)
                     progress.update(1)
+                    if progress_callback:
+                        progress_callback(len(keypoint_frames), progress_total)
 
                 frame_index += 1
     finally:

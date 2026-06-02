@@ -66,6 +66,21 @@ Video file
 
 The main entry point is `src/run_pipeline.py`.
 
+## Local Streamlit UI
+
+Run the local upload interface from the project root:
+
+```bash
+streamlit run src/streamlit_app.py
+```
+
+The page previews the uploaded video, shows live preprocessing and analysis
+progress, displays the detected segments, and provides the final JSON as a
+download. Use `rag` mode for a faster local run or `prompt` mode to include
+Qwen-VL visual analysis. Dense chunking is the UI default: it analyzes the
+full video with overlapping windows, including quiet holds that motion-only
+chunking may skip.
+
 ## Annotation Modes
 
 The pipeline supports two modes:
@@ -73,6 +88,7 @@ The pipeline supports two modes:
 ```bash
 python -m src.run_pipeline data/videos/sample.mp4 --annotation-mode prompt
 python -m src.run_pipeline data/videos/sample.mp4 --annotation-mode rag
+python -m src.run_pipeline data/videos/sample.mp4 --annotation-mode rag --chunking-mode dense
 ```
 
 `prompt` is the default mode. It runs RAG retrieval first, then sends the top candidates, HandX-style features, timestamps, and sampled frames to Qwen-VL. This gives the richest annotations.

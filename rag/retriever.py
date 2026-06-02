@@ -32,6 +32,8 @@ class HandXFeatures:
     avg_contact_duration: float = 0.0  # seconds
     wrist_velocity: float = 0.0  # m/s
     finger_flexion_variance: float = 0.0  # flexion ratio variance
+    finger_transition_count: int = 0
+    wrist_motion_event_count: int = 0
     primary_joints: List[int] = None  # MANO joint indices
     description: str = ""  # Optional user description
 
@@ -106,7 +108,7 @@ class ActionLibraryRetriever:
                 self.by_scale[scale] = []
             self.by_scale[scale].append(action)
         
-        print(f"✓ Loaded {len(self.actions)} actions from {self.library_path.name}")
+        print(f"Loaded {len(self.actions)} actions from {self.library_path.name}")
         print(f"  Scales: {', '.join(self.by_scale.keys())}")
     
     def _build_embeddings(self) -> None:
@@ -128,7 +130,7 @@ class ActionLibraryRetriever:
         
         self.kinematic_embeddings = self.vectorizer.fit_transform(self.kinematic_texts)
         
-        print(f"✓ Built TF-IDF embeddings ({self.kinematic_embeddings.shape[1]} features)")
+        print(f"Built TF-IDF embeddings ({self.kinematic_embeddings.shape[1]} features)")
     
     def _score_contact_ratio_match(
         self, 
@@ -194,27 +196,13 @@ class ActionLibraryRetriever:
         - macro: 0.05 <= contact_ratio <= 0.45 (wrist/arm-dominant)
         - bimanual: contact_ratio >= 0.30 AND both hands
         """
-        scale_thresholds = self.library_metadata.get('schema_notes', {}).get(
-            'scale_thresholds', {}
-        )
-        
-        # Determine measured scale
-        if hand_side == 'both' and contact_ratio >= 0.30:
-            measured_scale = 'bimanual'
-        elif 0.05 <= contact_ratio <= 0.45:
-            measured_scale = 'macro'
-        elif contact_ratio <= 0.25:
-            measured_scale = 'micro'
-        else:
-            measured_scale = 'ambiguous'
-        
-        # Score based on match
-        if measured_scale == action_scale:
-            return 1.0
-        elif measured_scale == 'ambiguous':
-            return 0.5  # Uncertain but not impossible
-        else:
-            return 0.2  # Wrong scale category
+        if action_scale == "bimanual":
+            return 1.0 if hand_side == "both" and contact_ratio >= 0.30 else 0.2
+        if action_scale == "micro":
+            return 1.0 if contact_ratio <= 0.25 else 0.2
+        if action_scale == "macro":
+            return 1.0 if 0.05 <= contact_ratio <= 0.45 else 0.2
+        return 0.5
     
     def _score_kinematic_similarity(
         self,
@@ -248,6 +236,34 @@ class ActionLibraryRetriever:
         
         # cosine_similarity returns [[score]], extract scalar
         return float(similarity[0, 0]) if similarity.size > 0 else 0.0
+
+    def _score_temporal_compatibility(
+        self,
+        handx_features: HandXFeatures,
+        action: Dict[str, Any],
+    ) -> float:
+        """Reward action classes whose temporal behavior matches the window."""
+        label = action["label"]
+        flexion_activity = handx_features.finger_flexion_variance
+        wrist_activity = handx_features.wrist_velocity
+        has_finger_changes = handx_features.finger_transition_count > 0
+        has_wrist_motion = handx_features.wrist_motion_event_count > 0
+
+        if label in ("static_hold_precision", "static_hold_power"):
+            if flexion_activity > 0.20 or wrist_activity > 0.05:
+                return 0.15
+            return 1.0
+
+        if label in ("finger_extension", "finger_flexion", "power_curl", "release", "button_press"):
+            return 1.0 if has_finger_changes else 0.2
+
+        if label in ("in_hand_rotation", "dial_rotation"):
+            return 1.0 if has_finger_changes else 0.4
+
+        if label in ("reach", "transport", "push", "pull", "wave"):
+            return 1.0 if has_wrist_motion else 0.25
+
+        return 0.6
     
     def retrieve(
         self,
@@ -318,13 +334,19 @@ class ActionLibraryRetriever:
                 use_text=True
             )
             evidence['kinematic_similarity'] = kinematic_score
+
+            # 5. Temporal compatibility (30% weight)
+            temporal_score = self._score_temporal_compatibility(handx_features, action)
+            evidence['temporal_compatibility'] = temporal_score
             
-            # Weighted combination (equal weights for all four components)
+            # Temporal evidence is important for separating holds from active
+            # manipulation inside fixed analysis windows.
             confidence = (
-                contact_score * 0.25 +
-                hand_score * 0.25 +
-                scale_score * 0.25 +
-                kinematic_score * 0.25
+                contact_score * 0.15 +
+                hand_score * 0.10 +
+                scale_score * 0.15 +
+                kinematic_score * 0.30 +
+                temporal_score * 0.30
             )
             
             scores.append({
@@ -461,6 +483,12 @@ def infer_kinematic_features(features: Dict[str, Any]) -> Dict[str, Any]:
     detected = features.get("detected_hands", [])
     if isinstance(detected, str):
         detected = [detected]
+    if not detected:
+        detected = [
+            hand
+            for hand in ("left", "right")
+            if features.get(f"{hand}_hand_events")
+        ]
     hand_sides = [hand for hand in detected if hand in ("left", "right")]
     if not hand_sides and detected:
         hand_sides = list(detected)
@@ -474,17 +502,24 @@ def infer_kinematic_features(features: Dict[str, Any]) -> Dict[str, Any]:
     else:
         hand_side = "unknown"
 
+    finger_transition_count = _count_finger_transitions(features)
+    wrist_motion_event_count = _count_wrist_motion_events(features)
     contact_ratio = float(features.get("contact_ratio", _estimate_contact_ratio(features)))
     wrist_velocity = float(features.get("wrist_velocity", _estimate_wrist_velocity(features)))
+    finger_flexion_variance = float(
+        features.get("finger_flexion_variance", min(1.0, finger_transition_count / 10.0))
+    )
 
     return {
         "contact_ratio": contact_ratio,
         "hand_side": hand_side,
-        "hand_sides_detected": hand_sides or ["left", "right"],
+        "hand_sides_detected": hand_sides,
         "contact_frequency": float(features.get("contact_frequency", 0.0)),
         "avg_contact_duration": float(features.get("avg_contact_duration", 0.0)),
         "wrist_velocity": wrist_velocity,
-        "finger_flexion_variance": float(features.get("finger_flexion_variance", 0.0)),
+        "finger_flexion_variance": finger_flexion_variance,
+        "finger_transition_count": finger_transition_count,
+        "wrist_motion_event_count": wrist_motion_event_count,
         "primary_joints": features.get("primary_joints"),
         "description": features.get("description") or build_kinematic_description(features),
     }
@@ -508,6 +543,27 @@ def build_kinematic_description(features: Dict[str, Any]) -> str:
             f"mean_distance={relationships.get('mean_distance', 0):.4f} "
             f"distance_change={relationships.get('distance_change', 0):.4f}"
         )
+
+    for hand_name in ("left", "right"):
+        events = features.get(f"{hand_name}_hand_events", {})
+        if not events:
+            continue
+
+        flexing = events.get("finger_flexing", {})
+        changed_joints = [
+            joint_name
+            for joint_name, joint_events in flexing.items()
+            if any(_is_transition(event) for event in joint_events)
+        ]
+        if changed_joints:
+            parts.append(f"{hand_name} finger flexion transitions: {', '.join(changed_joints)}")
+
+        wrist_events = events.get("wrist_trajectory", {})
+        if wrist_events:
+            parts.append(f"{hand_name} wrist trajectory active: {', '.join(wrist_events)}")
+
+        if events.get("finger_tip_contact"):
+            parts.append(f"{hand_name} fingertip contact active")
 
     for key in ("left_hand_events", "right_hand_events", "two_hand_relationships"):
         if key in features and features[key]:
@@ -557,7 +613,30 @@ def _estimate_wrist_velocity(features: Dict[str, Any]) -> float:
         float(stats.get("mean_center_speed", 0.0))
         for stats in features.get("hand_motion_summary", {}).values()
     ]
-    return max(speeds) if speeds else 0.0
+    if speeds:
+        return max(speeds)
+    return min(0.30, _count_wrist_motion_events(features) * 0.04)
+
+
+def _count_finger_transitions(features: Dict[str, Any]) -> int:
+    count = 0
+    for hand_name in ("left", "right"):
+        flexing = features.get(f"{hand_name}_hand_events", {}).get("finger_flexing", {})
+        for joint_events in flexing.values():
+            count += sum(1 for event in joint_events if _is_transition(event))
+    return count
+
+
+def _count_wrist_motion_events(features: Dict[str, Any]) -> int:
+    count = 0
+    for hand_name in ("left", "right"):
+        trajectories = features.get(f"{hand_name}_hand_events", {}).get("wrist_trajectory", {})
+        count += sum(len(events) for events in trajectories.values())
+    return count
+
+
+def _is_transition(event: Dict[str, Any]) -> bool:
+    return bool(event.get("start_des") and event.get("end_des") and event["start_des"] != event["end_des"])
 
 
 def create_handx_features_from_chunk(
@@ -590,6 +669,8 @@ def create_handx_features_from_chunk(
         avg_contact_duration=inferred["avg_contact_duration"],
         wrist_velocity=inferred["wrist_velocity"],
         finger_flexion_variance=inferred["finger_flexion_variance"],
+        finger_transition_count=inferred["finger_transition_count"],
+        wrist_motion_event_count=inferred["wrist_motion_event_count"],
         primary_joints=inferred.get("primary_joints"),
         description=inferred["description"] or f"Chunk {chunk.get('chunk_id', '?')}",
     )

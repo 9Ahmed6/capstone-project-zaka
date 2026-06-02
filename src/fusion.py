@@ -265,7 +265,8 @@ def _format_rag_context(rag_context: dict | None) -> str:
         header = ""
         if best:
             header = (
-                f"RAG top hypothesis: {best.get('action_label', 'unknown')} "
+                f"RAG starting hypothesis only (visual evidence may override it): "
+                f"{best.get('action_label', 'unknown')} "
                 f"(confidence={best.get('confidence', 0):.2f}, "
                 f"scale={best.get('movement_scale', 'unknown')}, "
                 f"hand={best.get('hand_side', 'unknown')})\n\n"
@@ -481,7 +482,8 @@ Return only valid JSON with this schema:
 
 Rules:
 - Choose action_label only from the RAG candidate labels listed below (confirmed_actions dictionary).
-- Treat RAG candidates as strong priors from kinematic similarity; reconcile them with frames and features.
+- Treat RAG candidates as a shortlist, not a conclusion. Reconcile them with frames and features.
+- Prefer a more specific visible interaction such as button_press or dial_rotation over a generic hold when the frames support it.
 - Prefer the best-matching RAG label when frames are ambiguous but kinematics align.
 - Use "unknown" if no RAG candidate clearly matches after checking features and frames.
 - movement_scale and hand_side should align with the chosen RAG entry when possible.
