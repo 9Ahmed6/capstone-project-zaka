@@ -1,6 +1,6 @@
 # Action-Based Video Understanding System
 
-This project turns hand-activity videos into structured action annotations. It detects hands frame by frame, segments motion into action chunks, extracts HandX-style kinematic features, retrieves candidate labels from a curated action dictionary, and uses Qwen-VL with sampled video frames to produce final JSON descriptions.
+This project turns hand-activity videos into structured action annotations. It detects hands frame by frame, creates motion-triggered or dense analysis chunks, extracts HandX-style kinematic features, retrieves candidate labels from a curated action dictionary, and can use Qwen-VL with sampled video frames to produce final JSON descriptions.
 
 Project contributors:
 
@@ -12,13 +12,17 @@ The current implementation is:
 
 - memory-friendly video preprocessing
 - MediaPipe hand landmark detection
-- motion-based chunking
+- motion-based and dense-window chunking
 - HandX-style feature extraction
 - RAG retrieval over `confirmed_actions.json`
 - Qwen2.5-VL visual description
 - `prompt` and `rag` description modes
+- local Streamlit upload interface
 - JSON and clip export
 - baseline temporal IoU and macro-F1 metrics
+
+For a source-level explanation of every project module, see
+[`docs/TECHNICAL_DOCUMENTATION.md`](docs/TECHNICAL_DOCUMENTATION.md).
 
 ## What The System Produces
 
@@ -56,8 +60,7 @@ Video file
  -> Store keypoints, timestamps, and original frame numbers
  -> Convert MediaPipe joints to HandX joint order
  -> Interpolate missing hand detections
- -> Compute motion signal from landmark displacement
- -> Segment motion into chunks
+ -> Create analysis chunks using motion thresholds or dense windows
  -> Extract HandX-style features for each chunk
  -> Retrieve top action candidates from confirmed_actions.json
  -> Optional: sample frames and ask Qwen-VL to refine the label
@@ -83,17 +86,22 @@ chunking may skip.
 
 ## Annotation Modes
 
-The pipeline supports two modes:
+The pipeline supports two annotation modes and two chunking modes:
 
 ```bash
 python -m src.run_pipeline data/videos/sample.mp4 --annotation-mode prompt
 python -m src.run_pipeline data/videos/sample.mp4 --annotation-mode rag
 python -m src.run_pipeline data/videos/sample.mp4 --annotation-mode rag --chunking-mode dense
+python -m src.run_pipeline data/videos/sample.mp4 --chunking-mode dense --dense-window-sec 4 --dense-overlap-sec 1
 ```
 
-`prompt` is the default mode. It runs RAG retrieval first, then sends the top candidates, HandX-style features, timestamps, and sampled frames to Qwen-VL. This gives the richest annotations.
+`prompt` is the default CLI annotation mode. It runs RAG retrieval first, then sends the top candidates, HandX-style features, timestamps, and sampled frames to Qwen-VL. This gives the richest annotations.
 
 `rag` uses only deterministic retrieval from the action dictionary. It is faster and does not load Qwen-VL.
+
+`motion` is the default CLI chunking mode. It creates segments only when landmark motion crosses the configured thresholds.
+
+`dense` creates overlapping windows across the full video. This is useful for quiet holds or subtle interactions that motion-only chunking may skip. The Streamlit UI defaults to `rag` annotation mode and `dense` chunking.
 
 Output file suffixes:
 
@@ -108,7 +116,7 @@ The current controlled vocabulary is:
 rag/action_dictionary/confirmed_actions.json
 ```
 
-It contains 36 action classes across three movement scales:
+It contains 38 action classes across three movement scales:
 
 - `micro`: isolated finger movements and precision gestures
 - `macro`: wrist, hand, and arm-dominant single-hand actions
@@ -131,8 +139,20 @@ Each action includes:
 - hand compatibility
 - movement-scale alignment
 - TF-IDF similarity between kinematic descriptions
+- temporal compatibility for active motion vs static holds
 
-The top matches are passed to Qwen-VL as the only allowed label candidates, which keeps labels consistent and prevents the model from inventing new class names.
+The current confidence formula is:
+
+```text
+confidence =
+    0.15 * contact_ratio
+  + 0.10 * hand_compatibility
+  + 0.15 * scale_alignment
+  + 0.30 * kinematic_similarity
+  + 0.30 * temporal_compatibility
+```
+
+The top matches are passed to Qwen-VL as the only allowed label candidates, which keeps labels consistent and prevents the model from inventing new class names. The default `top_k` is 6.
 
 ## Hand Detection
 
@@ -159,11 +179,11 @@ The hand slots are:
 
 The pipeline does not keep all raw frames in memory. It stores only landmarks, timestamps, and frame numbers, then reloads selected frames later when Qwen-VL needs visual context.
 
-## Motion Chunking
+## Chunking
 
-Motion chunking lives in `src/video_pipeline.py`.
+Chunking lives in `src/video_pipeline.py`.
 
-The system computes landmark displacement between consecutive frames:
+In motion mode, the system computes landmark displacement between consecutive frames:
 
 ```text
 motion becomes high -> chunk starts
@@ -177,7 +197,11 @@ chunking:
   start_threshold: 0.02
   end_threshold: 0.005
   min_frames: 20
+  dense_window_sec: 4.0
+  dense_overlap_sec: 1.0
 ```
+
+In dense mode, the full video is split into overlapping windows. With the default settings, each window is 4 seconds long and overlaps the next window by 1 second.
 
 Each chunk stores processed-frame indices, original video frame numbers, start/end times, and a stable `chunk_id`.
 
@@ -242,10 +266,10 @@ qwen:
 
 rag:
   confirmed_actions_path: "rag/action_dictionary/confirmed_actions.json"
-  top_k: 3
+  top_k: 6
 ```
 
-For faster runs, increase `frame_stride`, lower `max_frames_for_qwen`, or use `--annotation-mode rag`.
+For faster runs, increase `frame_stride`, lower `max_frames_for_qwen`, use `--annotation-mode rag`, or use motion chunking instead of dense chunking.
 
 For richer Qwen summaries, increase `max_new_tokens_vision`, but expect slower inference and more GPU memory use.
 
@@ -260,8 +284,9 @@ models/hand_landmarker.task            MediaPipe hand landmark model
 notebooks/experiments.ipynb            Experiment notebook
 outputs/json/                          Generated JSON and keypoint outputs
 outputs/clips/                         Per-chunk MP4 clips
+docs/TECHNICAL_DOCUMENTATION.md         Source-level technical documentation
 rag/action_dictionary/confirmed_actions.json
-                                        Curated 36-class action dictionary
+                                        Curated 38-class action dictionary
 rag/retriever.py                       RAG action retrieval logic
 schemas/output_schema.json             Expected output JSON schema
 src/exporter.py                        JSON and MP4 writing
@@ -270,6 +295,7 @@ src/hand_detection.py                  MediaPipe hand detection and interpolatio
 src/handx_features.py                  HandX/fallback feature extraction
 src/rag_annotator.py                   RAG-only annotation wrapper
 src/run_pipeline.py                    Main CLI runner
+src/streamlit_app.py                   Local upload interface
 src/video_pipeline.py                  Video metadata, motion signal, chunking
 ```
 
@@ -299,6 +325,12 @@ Run retrieval-only mode:
 
 ```bash
 python -m src.run_pipeline data/videos/your_video.mp4 --annotation-mode rag
+```
+
+Run dense-window analysis:
+
+```bash
+python -m src.run_pipeline data/videos/your_video.mp4 --annotation-mode rag --chunking-mode dense
 ```
 
 Use a custom config:
@@ -366,6 +398,12 @@ For a faster retrieval-only run:
 !python -m src.run_pipeline data/videos/your_video.mp4 --annotation-mode rag
 ```
 
+For dense-window analysis:
+
+```python
+!python -m src.run_pipeline data/videos/your_video.mp4 --annotation-mode rag --chunking-mode dense
+```
+
 7. Inspect outputs:
 
 ```python
@@ -415,7 +453,7 @@ Qwen-VL is slow or runs out of memory:
 
 - Use `--annotation-mode rag`.
 - Reduce `video.max_frames_for_qwen`.
-- Use a shorter video or smaller chunks.
+- Use a shorter video, motion chunking, or wider dense windows with less overlap.
 - Run on a Colab GPU or another CUDA machine.
 
 JSON parsing errors on long videos:
